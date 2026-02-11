@@ -14,9 +14,7 @@ sudo mkdir -p /opt/tasa-check
 sudo chown ubuntu:ubuntu /opt/tasa-check
 
 echo "=== 코드 클론 ==="
-# GitHub 레포 URL로 변경 필요
-# git clone https://github.com/<user>/tasa-check.git /opt/tasa-check
-echo "[!] git clone 명령을 실제 레포 URL로 수정한 뒤 실행하세요"
+git clone git@github.com:wooshikwon/tasa-check.git /opt/tasa-check
 
 echo "=== 의존성 설치 ==="
 cd /opt/tasa-check
