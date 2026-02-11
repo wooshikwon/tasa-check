@@ -110,12 +110,14 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # 헤더 전송
     total = len(results)
     important = len(reported)
-    await update.message.reply_text(format_check_header(total, important))
+    await update.message.reply_text(
+        format_check_header(total, important), parse_mode="HTML",
+    )
 
     # 기사별 개별 메시지 전송
     for article in reported:
         msg = format_article_message(article)
-        await update.message.reply_text(msg)
+        await update.message.reply_text(msg, parse_mode="HTML")
 
 
 async def setkey_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

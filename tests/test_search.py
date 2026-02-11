@@ -7,25 +7,12 @@ import httpx
 import pytest
 
 from src.tools.search import (
-    _build_query,
     _strip_html,
     _parse_pub_date,
     search_news,
 )
 
 KST = timezone(timedelta(hours=9))
-
-
-# --- 쿼리 빌드 ---
-
-def test_build_query_single():
-    """키워드 1개면 그대로 반환."""
-    assert _build_query(["서부지검"]) == "서부지검"
-
-
-def test_build_query_multiple():
-    """키워드 여러 개는 ' | '로 결합."""
-    assert _build_query(["서부지검", "서부지법"]) == "서부지검 | 서부지법"
 
 
 # --- HTML 태그 제거 ---
@@ -244,15 +231,16 @@ async def test_search_news_stops_early_on_old_articles():
 @pytest.mark.asyncio
 @patch("src.tools.search.NAVER_CLIENT_ID", "test-id")
 @patch("src.tools.search.NAVER_CLIENT_SECRET", "test-secret")
-async def test_search_news_query_built_correctly():
-    """키워드가 OR로 결합되어 API에 전달된다."""
+async def test_search_news_per_keyword_queries():
+    """키워드별로 개별 API 호출이 실행된다."""
     items = [_make_item("기사", "Wed, 11 Feb 2026 14:00:00 +0900")]
     mock_response = _make_response(items)
 
-    captured_params = {}
+    captured_queries = []
 
     async def mock_get(*args, **kwargs):
-        captured_params.update(kwargs.get("params", {}))
+        params = kwargs.get("params", {})
+        captured_queries.append(params.get("query"))
         return mock_response
 
     with patch("src.tools.search.httpx.AsyncClient") as MockClient:
@@ -264,9 +252,34 @@ async def test_search_news_query_built_correctly():
 
         await search_news(["서부지검", "서부지법"], _SINCE)
 
-    assert captured_params["query"] == "서부지검 | 서부지법"
-    assert captured_params["sort"] == "date"
-    assert captured_params["display"] == 100
+    assert "서부지검" in captured_queries
+    assert "서부지법" in captured_queries
+    assert len(captured_queries) == 2
+
+
+@pytest.mark.asyncio
+@patch("src.tools.search.NAVER_CLIENT_ID", "test-id")
+@patch("src.tools.search.NAVER_CLIENT_SECRET", "test-secret")
+async def test_search_news_deduplicates_across_keywords():
+    """동일 URL 기사가 여러 키워드에서 수집되면 중복 제거된다."""
+    # 두 키워드 검색에서 같은 originallink를 가진 기사가 반환됨
+    items = [_make_item("중복기사", "Wed, 11 Feb 2026 14:00:00 +0900")]
+    mock_response = _make_response(items)
+
+    async def mock_get(*args, **kwargs):
+        return mock_response
+
+    with patch("src.tools.search.httpx.AsyncClient") as MockClient:
+        instance = AsyncMock()
+        instance.get = mock_get
+        instance.__aenter__ = AsyncMock(return_value=instance)
+        instance.__aexit__ = AsyncMock(return_value=False)
+        MockClient.return_value = instance
+
+        results = await search_news(["서부지검", "서부지법"], _SINCE)
+
+    # 같은 기사가 두 번 검색됐지만 결과는 1건
+    assert len(results) == 1
 
 
 @pytest.mark.asyncio
