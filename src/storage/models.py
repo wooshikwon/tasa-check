@@ -4,7 +4,6 @@ DDL = """
 CREATE TABLE IF NOT EXISTS journalists (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id TEXT UNIQUE NOT NULL,
-    name TEXT NOT NULL,
     department TEXT NOT NULL,
     keywords TEXT NOT NULL,          -- JSON 배열
     api_key TEXT NOT NULL,           -- Fernet 암호화된 값

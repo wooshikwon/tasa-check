@@ -1,0 +1,15 @@
+[Unit]
+Description=Tasa Check Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/tasa-check
+ExecStart=/opt/tasa-check/.venv/bin/python main.py
+Restart=always
+RestartSec=5
+EnvironmentFile=/opt/tasa-check/.env
+
+[Install]
+WantedBy=multi-user.target

@@ -82,3 +82,67 @@ def test_format_article_html_escaping():
 
 def test_format_no_results():
     assert "신규 기사가 없습니다" in format_no_results()
+
+
+# --- /report 포맷 ---
+
+from src.bot.formatters import (
+    format_report_header_a,
+    format_report_header_b,
+    format_report_item,
+    format_report_no_update,
+)
+
+
+def test_format_report_header_a():
+    header = format_report_header_a("사회", "2026-02-11", 7)
+    assert "사회부 주요 뉴스" in header
+    assert "2026-02-11" in header
+    assert "7" in header
+
+
+def test_format_report_header_b():
+    header = format_report_header_b("사회", 2, 1)
+    assert "사회부 뉴스 업데이트" in header
+    assert "수정" in header
+    assert "추가" in header
+
+
+def test_format_report_item_scenario_a_new():
+    msg = format_report_item({
+        "title": "신규 기사 제목",
+        "summary": "기사 요약 내용",
+        "url": "https://example.com/1",
+        "category": "new",
+    })
+    assert "[신규]" in msg
+    assert "신규 기사 제목" in msg
+    assert "https://example.com/1" in msg
+
+
+def test_format_report_item_scenario_a_follow_up():
+    msg = format_report_item({
+        "title": "후속 기사",
+        "summary": "후속 요약",
+        "url": "https://example.com/2",
+        "category": "follow_up",
+        "prev_reference": '2026-02-10 "이전 기사"',
+    })
+    assert "[후속]" in msg
+    assert "이전 전달:" in msg
+
+
+def test_format_report_item_scenario_b():
+    msg = format_report_item({
+        "action": "modified",
+        "title": "수정 기사",
+        "summary": "갱신된 요약",
+        "url": "https://example.com/3",
+        "category": "new",
+    }, scenario_b=True)
+    assert "[수정]" in msg
+    assert "수정 기사" in msg
+
+
+def test_format_report_no_update():
+    assert "업데이트 없음" in format_report_no_update()

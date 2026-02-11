@@ -7,7 +7,7 @@ import json
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from src.agents.check_agent import _build_user_prompt, _parse_response, analyze_articles
+from src.agents.check_agent import _build_system_prompt, _build_user_prompt, _parse_response, analyze_articles
 
 
 # --- 프롬프트 조립 ---
@@ -44,6 +44,22 @@ def test_build_user_prompt_with_history():
     prompt = _build_user_prompt([], [], history, "사회")
     assert "서부지검 수사" in prompt
     assert "대표 소환" in prompt
+
+
+# --- 시스템 프롬프트 ---
+
+def test_build_system_prompt_includes_keywords():
+    """키워드가 시스템 프롬프트에 포함된다."""
+    prompt = _build_system_prompt(["서부지법", "마포경찰서"])
+    assert "서부지법" in prompt
+    assert "마포경찰서" in prompt
+    assert "키워드 관련성 필터" in prompt
+
+
+def test_build_system_prompt_no_keywords():
+    """키워드가 없으면 '키워드 없음' 표시."""
+    prompt = _build_system_prompt([])
+    assert "(키워드 없음)" in prompt
 
 
 # --- 응답 파싱 ---

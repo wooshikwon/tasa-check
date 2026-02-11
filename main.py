@@ -1,14 +1,25 @@
 """타사 체크 Telegram Bot 진입점."""
 
 import logging
+import os
 
+from dotenv import load_dotenv
 from telegram.ext import Application, CommandHandler
+
+# Langfuse 자동 계측 (Anthropic API 호출을 자동 트레이싱)
+load_dotenv()
+if os.environ.get("LANGFUSE_PUBLIC_KEY"):
+    from opentelemetry.instrumentation.anthropic import AnthropicInstrumentor
+    from langfuse import get_client
+
+    AnthropicInstrumentor().instrument()
+    get_client()
 
 from src.config import TELEGRAM_BOT_TOKEN, DB_PATH
 from src.storage.models import init_db
 from src.storage.repository import cleanup_old_data
 from src.bot.conversation import build_conversation_handler
-from src.bot.handlers import check_handler, setkey_handler
+from src.bot.handlers import check_handler, report_handler, setkey_handler
 
 logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -47,6 +58,9 @@ def main() -> None:
 
     # /check 타사 체크
     app.add_handler(CommandHandler("check", check_handler))
+
+    # /report 부서 뉴스 브리핑
+    app.add_handler(CommandHandler("report", report_handler))
 
     # /setkey API 키 변경
     app.add_handler(CommandHandler("setkey", setkey_handler))

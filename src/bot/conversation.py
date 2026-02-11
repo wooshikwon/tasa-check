@@ -1,6 +1,6 @@
 """프로필 등록 ConversationHandler.
 
-상태 머신: ENTRY → NAME → DEPARTMENT → KEYWORDS → API_KEY → DONE
+상태 머신: ENTRY → DEPARTMENT → KEYWORDS → API_KEY → DONE
 """
 
 import logging
@@ -20,24 +20,21 @@ from src.storage import repository as repo
 
 logger = logging.getLogger(__name__)
 
-NAME, DEPARTMENT, KEYWORDS, API_KEY = range(4)
+DEPARTMENT, KEYWORDS, API_KEY = range(3)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """대화 시작. 이름을 묻는다."""
-    await update.message.reply_text("타사 체크 봇입니다. 이름을 알려주세요.")
-    return NAME
-
-
-async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """이름 수신 → 부서 선택 Inline Keyboard 표시."""
-    context.user_data["name"] = update.message.text.strip()
-
+    """대화 시작. 부서 선택 Inline Keyboard 표시."""
+    # 부서 버튼을 2열로 배치
     keyboard = [
-        [InlineKeyboardButton(dept, callback_data=dept) for dept in DEPARTMENTS]
+        DEPARTMENTS[i:i+2] for i in range(0, len(DEPARTMENTS), 2)
+    ]
+    keyboard = [
+        [InlineKeyboardButton(dept, callback_data=dept) for dept in row]
+        for row in keyboard
     ]
     await update.message.reply_text(
-        "담당 부서를 선택해주세요.",
+        "타사 체크 봇입니다. 담당 부서를 선택해주세요.",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return DEPARTMENT
@@ -90,21 +87,22 @@ async def receive_api_key(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     ud = context.user_data
     db = context.bot_data["db"]
-    await repo.upsert_journalist(
+    journalist_id = await repo.upsert_journalist(
         db,
         telegram_id=str(update.effective_user.id),
-        name=ud["name"],
         department=ud["department"],
         keywords=ud["keywords"],
         api_key=api_key,
     )
+    # 기존 report/check 데이터 초기화
+    await repo.clear_journalist_data(db, journalist_id)
 
     keywords_str = ", ".join(ud["keywords"])
     await update.effective_chat.send_message(
         f"설정 완료!\n"
-        f"이름: {ud['name']} | 부서: {ud['department']}\n"
+        f"부서: {ud['department']}\n"
         f"키워드: {keywords_str}\n"
-        f"/check - 타사 체크 | /report - 부서 브리핑"
+        f"/check - 타사 체크 | /report - 부서 주요 뉴스"
     )
     context.user_data.clear()
     return ConversationHandler.END
@@ -122,7 +120,6 @@ def build_conversation_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)],
             DEPARTMENT: [CallbackQueryHandler(receive_department)],
             KEYWORDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_keywords)],
             API_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_api_key)],

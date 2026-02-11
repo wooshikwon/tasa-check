@@ -8,34 +8,38 @@ import json
 import logging
 
 import anthropic
+from langfuse import get_client as get_langfuse
+
+from src.config import DEPARTMENT_PROFILES
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """\
-당신은 기자의 타사 체크 보조입니다.
+_SYSTEM_PROMPT_TEMPLATE = """\
+당신은 {dept_label} 기자의 타사 체크 보조입니다.
 
-[주요 기사 판단 기준]
-아래 기준 중 하나 이상에 해당하면 [주요]로 판단한다:
+[취재 영역 - {dept_label}]
+{coverage_section}
 
-A. 팩트 기반
-  - 공식 조치: 체포, 구속, 기소, 영장 청구/기각, 판결, 정책 발표
-  - 수치적 규모: 금액, 인원, 피해 규모가 유의미한 수준
-  - 관계자 급: 고위 공직자, 대기업 임원, 공인 등
-  - 중대한 전개: 소환→구속, 수사→기소 등 국면 전환
+[기자의 취재 키워드]
+{keywords_section}
 
-B. 경쟁 관점
-  - 사실상 단독: [단독] 태그 없어도 특정 언론사만 보도한 기사
-  - 복수 보도: 3개 이상 주요 언론사가 동시 보도
-  - 새로운 앵글: 동일 사안에 대한 새로운 관점/정보
+[키워드 관련성 필터 - 최우선 기준]
+아래 기사들은 키워드로 검색된 결과이나, 검색 API 특성상 키워드와 무관한 기사가 포함될 수 있다.
+반드시 기사 내용이 위 키워드와 직접적으로 관련된 경우에만 판단 대상으로 삼는다.
+- "직접 관련"이란: 기사에 해당 키워드의 기관/장소/인물이 실제로 등장하거나, 해당 관할/소관 사안을 다루는 경우
+- 동일 분야라도 다른 기관/관할의 기사는 관련 없는 것으로 판단한다
+  예) 키워드가 "서부지법"인데 기사가 "서울중앙지법" 사건이면 → skip
+  예) 키워드가 "마포경찰서"인데 기사가 "강남경찰서" 사건이면 → skip
+- 키워드와 무관한 기사는 기사 가치와 무관하게 반드시 skip 처리한다
 
-C. 사회적 맥락 (맥락이 제공된 경우)
-  - 진행 중 주요 이슈와 직접 연결
-  - 정책/법률 변경에 영향 가능
-  - 후속 보도 가능성 높음
+[주요 기사 판단 기준 - {dept_label}]
+키워드 관련성을 통과한 기사에 한해, 아래 기준으로 판단한다:
+{criteria_section}
 
-D. 시의성
-  - 속보성: 방금 발생/확인된 사건
-  - 임박 이벤트: 오늘/내일 중 결정/발표/공판 예정
+추가 판단 기준:
+- 경쟁 관점: 사실상 단독([단독] 태그 또는 특정 언론사만 보도), 복수 보도(3개 이상 동시 보도), 새로운 앵글
+- 사회적 맥락: 진행 중 주요 이슈와 직접 연결, 후속 보도 가능성 높음
+- 시의성: 방금 발생/확인된 사건, 오늘/내일 중 결정 예정
 
 [중복 제거 기준]
 1. 동일 배치 내: 같은 사안의 여러 언론사 기사 → 가장 포괄적인 1건만 남김
@@ -51,17 +55,17 @@ D. 시의성
 [출력 형식]
 반드시 아래 JSON 배열로만 응답하라. JSON 외 텍스트는 포함하지 않는다.
 각 기사 항목:
-{
+{{
   "category": "exclusive" | "important" | "skip",
   "topic_cluster": "주제 식별자 (짧은 구문)",
   "publisher": "언론사명",
-  "title": "기사 제목",
-  "summary": "2~3문장 요약",
-  "reason": "주요 판단 근거 1문장 (skip이면 빈 문자열)",
+  "title": "기사 제목 (skip 포함 모든 항목에 반드시 기재)",
+  "summary": "2~3문장 요약 (skip이면 빈 문자열)",
+  "reason": "주요 판단 근거 1문장 (skip이면 스킵 사유)",
   "key_facts": ["핵심 팩트1", "핵심 팩트2"],
-  "article_urls": ["원본 URL"],
+  "article_urls": ["원본 URL (skip 포함 반드시 기재)"],
   "merged_from": ["병합된 다른 기사 URL"] 또는 빈 배열
-}
+}}
 """
 
 
@@ -121,14 +125,60 @@ def _build_user_prompt(
 
 
 def _parse_response(text: str) -> list[dict]:
-    """Claude 응답에서 JSON 배열을 파싱한다."""
+    """Claude 응답에서 JSON 배열을 파싱한다.
+
+    max_tokens로 잘린 경우 불완전한 JSON을 복구 시도한다.
+    """
     text = text.strip()
-    # 코드블록 마크다운 제거
-    if text.startswith("```"):
+    if "```" in text:
         lines = text.split("\n")
         lines = [l for l in lines if not l.startswith("```")]
-        text = "\n".join(lines)
-    return json.loads(text)
+        text = "\n".join(lines).strip()
+
+    # JSON 배열 영역 추출
+    start = text.find("[")
+    if start == -1:
+        logger.error("JSON 배열을 찾을 수 없음: %s", text[:200])
+        return []
+    text = text[start:]
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 잘린 JSON 복구: 마지막 완전한 객체(})까지만 사용
+    last_brace = text.rfind("}")
+    if last_brace > 0:
+        truncated = text[:last_brace + 1] + "]"
+        try:
+            return json.loads(truncated)
+        except json.JSONDecodeError:
+            pass
+
+    logger.error("JSON 파싱 실패: %s", text[:200])
+    return []
+
+
+def _dept_label(department: str) -> str:
+    """부서명에 '부'가 없으면 붙인다."""
+    return department if department.endswith("부") else f"{department}부"
+
+
+def _build_system_prompt(keywords: list[str], department: str) -> str:
+    """키워드와 부서 프로필을 포함한 시스템 프롬프트를 생성한다."""
+    dept_label = _dept_label(department)
+    profile = DEPARTMENT_PROFILES.get(dept_label, {})
+    keywords_section = ", ".join(keywords) if keywords else "(키워드 없음)"
+    coverage_section = profile.get("coverage", "")
+    criteria = profile.get("criteria", [])
+    criteria_section = "\n".join(f"- {c}" for c in criteria)
+    return _SYSTEM_PROMPT_TEMPLATE.format(
+        dept_label=dept_label,
+        keywords_section=keywords_section,
+        coverage_section=coverage_section,
+        criteria_section=criteria_section,
+    )
 
 
 async def analyze_articles(
@@ -137,6 +187,7 @@ async def analyze_articles(
     report_context: list[dict],
     history: list[dict],
     department: str,
+    keywords: list[str] | None = None,
 ) -> list[dict]:
     """Claude API로 기사를 분석한다.
 
@@ -146,20 +197,26 @@ async def analyze_articles(
         report_context: 당일 report_items (optional 맥락)
         history: 최근 24시간 보고 이력
         department: 기자 부서
+        keywords: 기자의 취재 키워드 목록
 
     Returns:
         분석 결과 리스트. 각 항목은 category, topic_cluster, publisher,
         title, summary, reason, key_facts, article_urls, merged_from 포함.
     """
+    system_prompt = _build_system_prompt(keywords or [], department)
     user_prompt = _build_user_prompt(articles, report_context, history, department)
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
-    message = await client.messages.create(
-        model="claude-sonnet-4-5-20250929",
-        max_tokens=4096,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
-    )
+    langfuse = get_langfuse()
+    with langfuse.start_as_current_observation(
+        as_type="span", name="check_agent", metadata={"department": department},
+    ):
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+        message = await client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=8192,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
 
     response_text = message.content[0].text
     return _parse_response(response_text)

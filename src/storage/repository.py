@@ -22,7 +22,6 @@ def decrypt_api_key(encrypted: str) -> str:
 async def upsert_journalist(
     db: aiosqlite.Connection,
     telegram_id: str,
-    name: str,
     department: str,
     keywords: list[str],
     api_key: str,
@@ -32,15 +31,15 @@ async def upsert_journalist(
     keywords_json = json.dumps(keywords, ensure_ascii=False)
     await db.execute(
         """
-        INSERT INTO journalists (telegram_id, name, department, keywords, api_key)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO journalists (telegram_id, department, keywords, api_key)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(telegram_id) DO UPDATE SET
-            name = excluded.name,
             department = excluded.department,
             keywords = excluded.keywords,
-            api_key = excluded.api_key
+            api_key = excluded.api_key,
+            last_check_at = NULL
         """,
-        (telegram_id, name, department, keywords_json, encrypted_key),
+        (telegram_id, department, keywords_json, encrypted_key),
     )
     await db.commit()
     cursor = await db.execute(
@@ -61,13 +60,27 @@ async def get_journalist(db: aiosqlite.Connection, telegram_id: str) -> dict | N
     return {
         "id": row["id"],
         "telegram_id": row["telegram_id"],
-        "name": row["name"],
         "department": row["department"],
         "keywords": json.loads(row["keywords"]),
         "api_key": decrypt_api_key(row["api_key"]),
         "last_check_at": row["last_check_at"],
         "created_at": row["created_at"],
     }
+
+
+async def clear_journalist_data(db: aiosqlite.Connection, journalist_id: int) -> None:
+    """기자의 report/check 관련 데이터를 모두 삭제한다."""
+    await db.execute(
+        """
+        DELETE FROM report_items WHERE report_cache_id IN (
+            SELECT id FROM report_cache WHERE journalist_id = ?
+        )
+        """,
+        (journalist_id,),
+    )
+    await db.execute("DELETE FROM report_cache WHERE journalist_id = ?", (journalist_id,))
+    await db.execute("DELETE FROM reported_articles WHERE journalist_id = ?", (journalist_id,))
+    await db.commit()
 
 
 async def update_api_key(db: aiosqlite.Connection, telegram_id: str, api_key: str) -> None:
@@ -152,7 +165,127 @@ async def get_recent_reported_articles(
     ]
 
 
-# --- report_items (Phase 2 대비, /check에서 맥락 로드용) ---
+# --- report_cache / report_items ---
+
+async def get_or_create_report_cache(
+    db: aiosqlite.Connection,
+    journalist_id: int,
+    date: str,
+) -> tuple[int, bool]:
+    """당일 report_cache를 조회하거나 생성한다.
+
+    Returns:
+        (cache_id, is_new) — is_new가 True면 시나리오 A, False면 시나리오 B.
+    """
+    cursor = await db.execute(
+        "SELECT id FROM report_cache WHERE journalist_id = ? AND date = ?",
+        (journalist_id, date),
+    )
+    row = await cursor.fetchone()
+    if row:
+        return row["id"], False
+
+    now = datetime.now(UTC).isoformat()
+    cursor = await db.execute(
+        "INSERT INTO report_cache (journalist_id, date, updated_at) VALUES (?, ?, ?)",
+        (journalist_id, date, now),
+    )
+    await db.commit()
+    return cursor.lastrowid, True
+
+
+async def get_report_items_by_cache(
+    db: aiosqlite.Connection,
+    report_cache_id: int,
+) -> list[dict]:
+    """특정 report_cache의 전체 항목을 조회한다."""
+    cursor = await db.execute(
+        "SELECT * FROM report_items WHERE report_cache_id = ? ORDER BY created_at",
+        (report_cache_id,),
+    )
+    rows = await cursor.fetchall()
+    return [
+        {
+            "id": r["id"],
+            "title": r["title"],
+            "url": r["url"],
+            "summary": r["summary"],
+            "tags": json.loads(r["tags"]),
+            "category": r["category"],
+            "prev_reference": r["prev_reference"],
+        }
+        for r in rows
+    ]
+
+
+async def save_report_items(
+    db: aiosqlite.Connection,
+    report_cache_id: int,
+    items: list[dict],
+) -> None:
+    """report_items에 항목들을 저장한다."""
+    now = datetime.now(UTC).isoformat()
+    for item in items:
+        await db.execute(
+            """
+            INSERT INTO report_items
+                (report_cache_id, title, url, summary, tags, category, prev_reference, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report_cache_id,
+                item["title"],
+                item["url"],
+                item["summary"],
+                json.dumps(item.get("tags", []), ensure_ascii=False),
+                item["category"],
+                item.get("prev_reference"),
+                now,
+                now,
+            ),
+        )
+    await db.commit()
+
+
+async def update_report_item(
+    db: aiosqlite.Connection,
+    item_id: int,
+    summary: str,
+) -> None:
+    """기존 report_item의 요약을 갱신한다. 시나리오 B [수정] 처리용."""
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        "UPDATE report_items SET summary = ?, updated_at = ? WHERE id = ?",
+        (summary, now, item_id),
+    )
+    await db.commit()
+
+
+async def get_recent_report_tags(
+    db: aiosqlite.Connection,
+    journalist_id: int,
+    days: int = 3,
+) -> list[str]:
+    """최근 N일간 report_items의 태그를 추출한다. 후속 검색 쿼리 생성용."""
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
+    cursor = await db.execute(
+        """
+        SELECT ri.tags FROM report_items ri
+        JOIN report_cache rc ON ri.report_cache_id = rc.id
+        WHERE rc.journalist_id = ? AND rc.date >= ?
+        """,
+        (journalist_id, cutoff),
+    )
+    rows = await cursor.fetchall()
+    tags: list[str] = []
+    seen: set[str] = set()
+    for r in rows:
+        for tag in json.loads(r["tags"]):
+            if tag not in seen:
+                seen.add(tag)
+                tags.append(tag)
+    return tags
+
 
 async def get_today_report_items(
     db: aiosqlite.Connection,
