@@ -1,0 +1,120 @@
+{
+  "description": "주요 언론사 화이트리스트 (Top 23)",
+  "publishers": [
+    {
+      "name": "조선일보",
+      "domain": "chosun.com",
+      "category": "종합일간지"
+    },
+    {
+      "name": "중앙일보",
+      "domain": "joongang.co.kr",
+      "category": "종합일간지"
+    },
+    {
+      "name": "동아일보",
+      "domain": "donga.com",
+      "category": "종합일간지"
+    },
+    {
+      "name": "한겨레",
+      "domain": "hani.co.kr",
+      "category": "종합일간지"
+    },
+    {
+      "name": "경향신문",
+      "domain": "khan.co.kr",
+      "category": "종합일간지"
+    },
+    {
+      "name": "한국일보",
+      "domain": "hankookilbo.com",
+      "category": "종합일간지"
+    },
+    {
+      "name": "국민일보",
+      "domain": "kmib.co.kr",
+      "category": "종합일간지"
+    },
+    {
+      "name": "문화일보",
+      "domain": "munhwa.com",
+      "category": "석간"
+    },
+    {
+      "name": "서울신문",
+      "domain": "seoul.co.kr",
+      "category": "석간"
+    },
+    {
+      "name": "세계일보",
+      "domain": "segye.com",
+      "category": "석간"
+    },
+    {
+      "name": "매일경제",
+      "domain": "mk.co.kr",
+      "category": "경제지"
+    },
+    {
+      "name": "한국경제",
+      "domain": "hankyung.com",
+      "category": "경제지"
+    },
+    {
+      "name": "KBS",
+      "domain": "news.kbs.co.kr",
+      "category": "지상파"
+    },
+    {
+      "name": "MBC",
+      "domain": "imnews.imbc.com",
+      "category": "지상파"
+    },
+    {
+      "name": "SBS",
+      "domain": "news.sbs.co.kr",
+      "category": "지상파"
+    },
+    {
+      "name": "JTBC",
+      "domain": "news.jtbc.co.kr",
+      "category": "종편"
+    },
+    {
+      "name": "YTN",
+      "domain": "ytn.co.kr",
+      "category": "보도전문"
+    },
+    {
+      "name": "채널A",
+      "domain": "ichannela.com",
+      "category": "종편"
+    },
+    {
+      "name": "TV조선",
+      "domain": "tvchosun.com",
+      "category": "종편"
+    },
+    {
+      "name": "MBN",
+      "domain": "mbn.co.kr",
+      "category": "종편"
+    },
+    {
+      "name": "연합뉴스",
+      "domain": "yna.co.kr",
+      "category": "통신사"
+    },
+    {
+      "name": "뉴시스",
+      "domain": "newsis.com",
+      "category": "통신사"
+    },
+    {
+      "name": "뉴스1",
+      "domain": "news1.kr",
+      "category": "통신사"
+    }
+  ]
+}

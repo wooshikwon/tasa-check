@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+data/tasa-check.db
+.DS_Store
