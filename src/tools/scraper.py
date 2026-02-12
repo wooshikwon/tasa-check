@@ -20,7 +20,7 @@ _HEADERS = {
         "Chrome/131.0.0.0 Safari/537.36"
     ),
 }
-_MAX_PARAGRAPHS = 2
+_MAX_PARAGRAPHS = 3
 
 
 def _parse_article_body(html: str) -> str | None:
