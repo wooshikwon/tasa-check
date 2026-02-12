@@ -173,6 +173,7 @@ async def _run_report_pipeline(
             "publisher": publisher,
             "body": body,
             "originallink": a["originallink"],
+            "link": a["link"],
             "pubDate": pub_date_str,
         })
 
@@ -196,8 +197,8 @@ async def _run_report_pipeline(
             valid_sources = [i for i in source_indices if 1 <= i <= n]
             if valid_sources:
                 src = articles_for_analysis[valid_sources[0] - 1]
-                if not r.get("url"):
-                    r["url"] = src["originallink"]
+                if not r.get("url") or "naver" not in r.get("url", ""):
+                    r["url"] = src["link"]
                 r["publisher"] = src["publisher"]
                 pub_date = src.get("pubDate", "")
                 r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
