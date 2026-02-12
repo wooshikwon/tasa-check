@@ -16,7 +16,7 @@ from src.agents.report_agent import run_report_agent
 from src.storage import repository as repo
 from src.bot.formatters import (
     format_check_header, format_article_message, format_no_results,
-    format_no_important, format_skipped_articles,
+    format_skipped_articles,
     format_report_header_a, format_report_header_b,
     format_report_item,
 )
@@ -151,15 +151,7 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if reported:
             await repo.update_last_check_at(db, journalist["id"])
 
-        if not reported:
-            await update.message.reply_text(format_no_important())
-            if skipped:
-                await update.message.reply_text(
-                    format_skipped_articles(skipped), parse_mode="HTML", disable_web_page_preview=True,
-                )
-            return
-
-        # 헤더 전송
+        # 헤더 전송 (시간 범위 항상 표시)
         total = len(results)
         important = len(reported)
         await update.message.reply_text(
