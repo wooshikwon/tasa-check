@@ -251,8 +251,8 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             format_check_header(total, important, since, now), parse_mode="HTML",
         )
 
-        # 단독 기사를 앞에 정렬
-        sorted_reported = sorted(reported, key=lambda r: r.get("category") != "exclusive")
+        # 최신 기사 먼저 (pub_time desc)
+        sorted_reported = sorted(reported, key=lambda r: r.get("pub_time", ""), reverse=True)
         for article in sorted_reported:
             msg = format_article_message(article)
             await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
@@ -331,8 +331,8 @@ async def _handle_report_scenario_a(
         await send_fn("관련 뉴스를 찾지 못했습니다.")
         return
 
-    # 후속 항목을 앞에 정렬
-    sorted_results = sorted(results, key=lambda r: r.get("category") != "follow_up")
+    # 최신 기사 먼저 (pub_time desc)
+    sorted_results = sorted(results, key=lambda r: r.get("pub_time", ""), reverse=True)
 
     await send_fn(
         format_report_header_a(department, today, len(sorted_results)),
@@ -403,9 +403,11 @@ async def _handle_report_scenario_b(
         parse_mode="HTML",
     )
 
-    # 수정/추가 항목을 앞에, 기존(unchanged) 항목을 뒤에 정렬
-    action_order = {"modified": 0, "added": 1, "unchanged": 2}
-    sorted_items = sorted(merged_items, key=lambda r: action_order.get(r.get("action", ""), 2))
+    # [수정]/[신규] 먼저, 일반 뒤. 각 그룹 내 최신 기사 먼저 (pub_time desc)
+    action_order = {"modified": 0, "added": 0, "unchanged": 1}
+    # 안정 정렬: 1) 시간 역순 → 2) 그룹 순 (그룹 내 시간 순서 유지)
+    sorted_items = sorted(merged_items, key=lambda r: r.get("pub_time", ""), reverse=True)
+    sorted_items = sorted(sorted_items, key=lambda r: action_order.get(r.get("action", ""), 1))
     for item in sorted_items:
         msg = format_report_item(item, scenario_b=True)
         await send_fn(msg, parse_mode="HTML", disable_web_page_preview=True)

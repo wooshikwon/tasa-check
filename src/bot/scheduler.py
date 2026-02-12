@@ -77,7 +77,7 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
             format_check_header(len(results), len(reported), since, now),
             parse_mode="HTML",
         )
-        sorted_reported = sorted(reported, key=lambda r: r.get("category") != "exclusive")
+        sorted_reported = sorted(reported, key=lambda r: r.get("pub_time", ""), reverse=True)
         for article in sorted_reported:
             await send_fn(
                 format_article_message(article),
