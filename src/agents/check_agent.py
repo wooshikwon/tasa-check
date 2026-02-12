@@ -46,6 +46,10 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 2. 이전 보고 대비: 이력과 실질적으로 동일한 내용이면 스킵
 3. 중복 예외: 이전 보고 주제라도 중요한 새 팩트(공식 조치, 수치 변경, 인물 추가 등)가 있으면 보고
 
+[이전 skip 기사 승격 제한]
+이전에 skip 판정된 주제와 동일한 기사는 원칙적으로 skip을 유지한다.
+skip 사유를 뒤집을 새로운 정보(공식 발표, 수사 진전, 복수 언론 보도 전환 등)가 있을 때만 승격한다.
+
 [요약 작성 기준]
 - 구체적 정보: "수사가 확대됐다" 대신 "임원 3명을 추가 소환했다"
 - 핵심 수치/사실 포함: 인물명, 기관명, 일시 등
@@ -78,10 +82,13 @@ def _build_user_prompt(
     """사용자 프롬프트를 조립한다."""
     sections = []
 
-    # 보고 이력
-    if history:
+    # 보고 이력 (보고 + skip 분리)
+    reported_history = [h for h in history if h["category"] != "skip"]
+    skipped_history = [h for h in history if h["category"] == "skip"]
+
+    if reported_history:
         lines = ["[기자의 최근 보고 이력]"]
-        for h in history:
+        for h in reported_history:
             time_str = h["checked_at"][:16] if h.get("checked_at") else ""
             facts = ", ".join(f"({j}) {f}" for j, f in enumerate(h["key_facts"], 1))
             lines.append(f"- {time_str} 보고: \"{h['topic_cluster']}\"")
@@ -89,6 +96,13 @@ def _build_user_prompt(
         sections.append("\n".join(lines))
     else:
         sections.append("[기자의 최근 보고 이력]\n이력 없음")
+
+    if skipped_history:
+        lines = ["[이전 skip 이력 - 동일 주제는 새 정보 없이 승격 금지]"]
+        for h in skipped_history:
+            reason = h.get("reason", "")
+            lines.append(f"- \"{h['topic_cluster']}\" → {reason}")
+        sections.append("\n".join(lines))
 
     # 새로 수집된 기사 (번호로 참조, URL은 코드에서 관리)
     lines = ["[새로 수집된 기사]"]

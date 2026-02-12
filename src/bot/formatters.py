@@ -84,12 +84,14 @@ def format_skipped_articles(skipped: list[dict]) -> str:
     lines = [f"<b>스킵 {len(deduped)}건</b>"]
     for article in deduped:
         title = html_module.escape(article.get("title", "")).strip()
+        reason = html_module.escape(article.get("reason", "")).strip()
         urls = article.get("article_urls", [])
         url = urls[0] if urls else ""
-        if url:
-            lines.append(f'- <a href="{html_module.escape(url)}">{title or "(제목 없음)"}</a>')
+        title_part = f'<a href="{html_module.escape(url)}">{title or "(제목 없음)"}</a>' if url else (title or "(제목 없음)")
+        if reason:
+            lines.append(f"- {title_part} → {reason}")
         else:
-            lines.append(f"- {title or '(제목 없음)'}")
+            lines.append(f"- {title_part}")
     return _truncate("\n".join(lines))
 
 

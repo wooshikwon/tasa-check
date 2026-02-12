@@ -110,26 +110,27 @@ async def save_reported_articles(
     journalist_id: int,
     articles: list[dict],
 ) -> None:
-    """Claude가 분석한 보고 기사들을 저장한다.
+    """Claude가 분석한 기사들을 저장한다 (skip 포함).
 
-    articles 각 항목: {topic_cluster, key_facts, summary, article_urls, category}
+    articles 각 항목: {topic_cluster, key_facts, summary, article_urls, category, reason}
     """
     now = datetime.now(UTC).isoformat()
     for article in articles:
         await db.execute(
             """
             INSERT INTO reported_articles
-                (journalist_id, checked_at, topic_cluster, key_facts, summary, article_urls, category)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (journalist_id, checked_at, topic_cluster, key_facts, summary, article_urls, category, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 journalist_id,
                 now,
-                article["topic_cluster"],
-                json.dumps(article["key_facts"], ensure_ascii=False),
-                article["summary"],
-                json.dumps(article["article_urls"], ensure_ascii=False),
+                article.get("topic_cluster", ""),
+                json.dumps(article.get("key_facts", []), ensure_ascii=False),
+                article.get("summary", ""),
+                json.dumps(article.get("article_urls", []), ensure_ascii=False),
                 article["category"],
+                article.get("reason", ""),
             ),
         )
     await db.commit()
@@ -160,6 +161,7 @@ async def get_recent_reported_articles(
             "summary": r["summary"],
             "article_urls": json.loads(r["article_urls"]),
             "category": r["category"],
+            "reason": r["reason"] if "reason" in r.keys() else "",
         }
         for r in rows
     ]

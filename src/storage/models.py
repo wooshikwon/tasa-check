@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS reported_articles (
     key_facts TEXT NOT NULL,         -- JSON 배열
     summary TEXT NOT NULL,
     article_urls TEXT NOT NULL,      -- JSON 배열
-    category TEXT NOT NULL           -- "exclusive" / "important"
+    category TEXT NOT NULL,          -- "exclusive" / "important" / "skip"
+    reason TEXT DEFAULT ''           -- 판단 근거 (skip이면 스킵 사유)
 );
 """
 
@@ -50,5 +51,10 @@ async def init_db(db_path: str) -> aiosqlite.Connection:
     db = await aiosqlite.connect(db_path)
     db.row_factory = aiosqlite.Row
     await db.executescript(DDL)
+    # 기존 DB 마이그레이션: reason 컬럼 추가
+    try:
+        await db.execute("ALTER TABLE reported_articles ADD COLUMN reason TEXT DEFAULT ''")
+    except Exception:
+        pass  # 이미 존재하면 무시
     await db.commit()
     return db

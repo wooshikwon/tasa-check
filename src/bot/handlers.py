@@ -1,5 +1,6 @@
 """/check, /report, /setkey 명령 핸들러."""
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -21,6 +22,9 @@ from src.bot.formatters import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 사용자별 동시 실행 방지 잠금
+_user_locks: dict[str, asyncio.Lock] = {}
 
 
 async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, datetime, datetime]:
@@ -111,60 +115,67 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     db = context.bot_data["db"]
     telegram_id = str(update.effective_user.id)
 
+    # 동시 실행 방지
+    lock = _user_locks.setdefault(telegram_id, asyncio.Lock())
+    if lock.locked():
+        await update.message.reply_text("이전 요청이 처리 중입니다. 완료 후 다시 시도해주세요.")
+        return
+
     # [1] 프로필 로드
     journalist = await repo.get_journalist(db, telegram_id)
     if not journalist:
         await update.message.reply_text("프로필이 없습니다. /start로 등록해주세요.")
         return
 
-    await update.message.reply_text("타사 체크 진행 중...")
+    async with lock:
+        await update.message.reply_text("타사 체크 진행 중...")
 
-    try:
-        results, since, now = await _run_check_pipeline(db, journalist)
-    except Exception as e:
-        logger.error("타사 체크 실패: %s", e, exc_info=True)
-        await update.message.reply_text(f"타사 체크 중 오류가 발생했습니다: {e}")
-        return
+        try:
+            results, since, now = await _run_check_pipeline(db, journalist)
+        except Exception as e:
+            logger.error("타사 체크 실패: %s", e, exc_info=True)
+            await update.message.reply_text(f"타사 체크 중 오류가 발생했습니다: {e}")
+            return
 
-    if results is None:
-        await update.message.reply_text(format_no_results())
-        return
+        if results is None:
+            await update.message.reply_text(format_no_results())
+            return
 
-    # [8] 결과 저장 + 기사별 전송
-    reported = [r for r in results if r["category"] != "skip"]
-    skipped = [r for r in results if r["category"] == "skip"]
+        # [8] 결과 저장 + 기사별 전송
+        reported = [r for r in results if r["category"] != "skip"]
+        skipped = [r for r in results if r["category"] == "skip"]
 
-    # DB에 보고 이력 저장 + 윈도우 갱신 (보고 대상이 있을 때만)
-    if reported:
-        await repo.save_reported_articles(db, journalist["id"], reported)
-        await repo.update_last_check_at(db, journalist["id"])
+        # DB에 보고 이력 저장 (skip 포함)
+        await repo.save_reported_articles(db, journalist["id"], results)
+        # 윈도우 갱신은 보고 대상이 있을 때만
+        if reported:
+            await repo.update_last_check_at(db, journalist["id"])
 
-    if not reported:
-        await update.message.reply_text(format_no_important())
-        # 스킵 기사가 있으면 목록 전송
+        if not reported:
+            await update.message.reply_text(format_no_important())
+            if skipped:
+                await update.message.reply_text(
+                    format_skipped_articles(skipped), parse_mode="HTML", disable_web_page_preview=True,
+                )
+            return
+
+        # 헤더 전송
+        total = len(results)
+        important = len(reported)
+        await update.message.reply_text(
+            format_check_header(total, important, since, now), parse_mode="HTML",
+        )
+
+        # 주요 기사 개별 메시지 전송
+        for article in reported:
+            msg = format_article_message(article)
+            await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
+
+        # 스킵 기사 목록 전송
         if skipped:
             await update.message.reply_text(
                 format_skipped_articles(skipped), parse_mode="HTML", disable_web_page_preview=True,
             )
-        return
-
-    # 헤더 전송
-    total = len(results)
-    important = len(reported)
-    await update.message.reply_text(
-        format_check_header(total, important, since, now), parse_mode="HTML",
-    )
-
-    # 주요 기사 개별 메시지 전송
-    for article in reported:
-        msg = format_article_message(article)
-        await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
-
-    # 스킵 기사 목록 전송
-    if skipped:
-        await update.message.reply_text(
-            format_skipped_articles(skipped), parse_mode="HTML", disable_web_page_preview=True,
-        )
 
 
 async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -172,52 +183,59 @@ async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     db = context.bot_data["db"]
     telegram_id = str(update.effective_user.id)
 
+    # 동시 실행 방지
+    lock = _user_locks.setdefault(telegram_id, asyncio.Lock())
+    if lock.locked():
+        await update.message.reply_text("이전 요청이 처리 중입니다. 완료 후 다시 시도해주세요.")
+        return
+
     journalist = await repo.get_journalist(db, telegram_id)
     if not journalist:
         await update.message.reply_text("프로필이 없습니다. /start로 등록해주세요.")
         return
 
-    await update.message.reply_text("브리핑 생성 중...")
+    async with lock:
+        await update.message.reply_text("브리핑 생성 중...")
 
-    today = datetime.now(UTC).strftime("%Y-%m-%d")
-    department = journalist["department"]
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        department = journalist["department"]
 
-    # 캐시 확인
-    cache_id, is_new = await repo.get_or_create_report_cache(db, journalist["id"], today)
+        # 캐시 확인
+        cache_id, is_new = await repo.get_or_create_report_cache(db, journalist["id"], today)
 
-    existing_items = []
-    if not is_new:
-        existing_items = await repo.get_report_items_by_cache(db, cache_id)
+        existing_items = []
+        if not is_new:
+            existing_items = await repo.get_report_items_by_cache(db, cache_id)
 
-    # 캐시 행은 있지만 items가 비어있으면 시나리오 A로 취급
-    is_scenario_a = is_new or len(existing_items) == 0
+        # 캐시 행은 있지만 items가 비어있으면 시나리오 A로 취급
+        is_scenario_a = is_new or len(existing_items) == 0
 
-    # 최근 태그 로드
-    recent_tags = await repo.get_recent_report_tags(db, journalist["id"], days=3)
+        # 최근 태그 로드
+        recent_tags = await repo.get_recent_report_tags(db, journalist["id"], days=3)
 
-    # 에이전트 실행
-    try:
-        results = await run_report_agent(
-            api_key=journalist["api_key"],
-            department=department,
-            date=today,
-            recent_tags=recent_tags,
-            existing_items=existing_items if not is_scenario_a else None,
-        )
-    except Exception as e:
-        logger.error("report_agent 실행 실패: %s", e, exc_info=True)
-        await update.message.reply_text(f"브리핑 생성 중 오류가 발생했습니다: {e}")
-        return
+        # 에이전트 실행
+        try:
+            results = await run_report_agent(
+                api_key=journalist["api_key"],
+                department=department,
+                date=today,
+                recent_tags=recent_tags,
+                existing_items=existing_items if not is_scenario_a else None,
+            )
+        except Exception as e:
+            logger.error("report_agent 실행 실패: %s", e, exc_info=True)
+            await update.message.reply_text(f"브리핑 생성 중 오류가 발생했습니다: {e}")
+            return
 
-    if is_scenario_a:
-        await _handle_report_scenario_a(
-            update, db, cache_id, department, today, results,
-        )
-    else:
-        await _handle_report_scenario_b(
-            update, db, cache_id, department, today,
-            existing_items, results,
-        )
+        if is_scenario_a:
+            await _handle_report_scenario_a(
+                update, db, cache_id, department, today, results,
+            )
+        else:
+            await _handle_report_scenario_b(
+                update, db, cache_id, department, today,
+                existing_items, results,
+            )
 
 
 async def _handle_report_scenario_a(
