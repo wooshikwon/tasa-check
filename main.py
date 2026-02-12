@@ -2,6 +2,7 @@
 
 import logging
 import os
+from datetime import time, timedelta, timezone
 
 from dotenv import load_dotenv
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler
@@ -33,12 +34,26 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _daily_cleanup(context) -> None:
+    """매일 새벽 자동 실행: 오래된 캐시 데이터 정리."""
+    db = context.bot_data.get("db")
+    if db:
+        await cleanup_old_data(db)
+        logger.info("일일 캐시 정리 완료")
+
+
 async def post_init(application: Application) -> None:
     """앱 시작 시 DB 초기화 + 캐시 정리 + 스케줄 복원."""
     db = await init_db(DB_PATH)
     application.bot_data["db"] = db
     await cleanup_old_data(db)
     await restore_schedules(application, db)
+
+    # 매일 04:00 KST 자동 캐시 정리
+    _KST = timezone(timedelta(hours=9))
+    application.job_queue.run_daily(
+        _daily_cleanup, time=time(hour=4, minute=0, tzinfo=_KST), name="daily_cleanup",
+    )
     logger.info("DB 초기화 완료: %s", DB_PATH)
 
 

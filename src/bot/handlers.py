@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 # 사용자별 동시 실행 방지 잠금
 _user_locks: dict[str, asyncio.Lock] = {}
 
+# 전역 동시 파이프라인 제한 (1GB RAM 서버 OOM 방지)
+_pipeline_semaphore = asyncio.Semaphore(3)
+
 
 async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, datetime, datetime]:
     """네이버 검색 → 필터 → 본문 수집 → Claude 분석 파이프라인.
@@ -130,40 +133,36 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     async with lock:
         await update.message.reply_text("타사 체크 진행 중...")
 
-        try:
-            results, since, now = await _run_check_pipeline(db, journalist)
-        except Exception as e:
-            logger.error("타사 체크 실패: %s", e, exc_info=True)
-            await update.message.reply_text(f"타사 체크 중 오류가 발생했습니다: {e}")
-            return
+        async with _pipeline_semaphore:
+            try:
+                results, since, now = await _run_check_pipeline(db, journalist)
+            except Exception as e:
+                logger.error("타사 체크 실패: %s", e, exc_info=True)
+                await update.message.reply_text(f"타사 체크 중 오류가 발생했습니다: {e}")
+                return
 
         if results is None:
             await update.message.reply_text(format_no_results())
             return
 
-        # [8] 결과 저장 + 기사별 전송
+        # 결과 저장 + 기사별 전송 (세마포어 해제 후)
         reported = [r for r in results if r["category"] != "skip"]
         skipped = [r for r in results if r["category"] == "skip"]
 
-        # DB에 보고 이력 저장 (skip 포함)
         await repo.save_reported_articles(db, journalist["id"], results)
-        # 윈도우 갱신은 보고 대상이 있을 때만
         if reported:
             await repo.update_last_check_at(db, journalist["id"])
 
-        # 헤더 전송 (시간 범위 항상 표시)
         total = len(results)
         important = len(reported)
         await update.message.reply_text(
             format_check_header(total, important, since, now), parse_mode="HTML",
         )
 
-        # 주요 기사 개별 메시지 전송
         for article in reported:
             msg = format_article_message(article)
             await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
 
-        # 스킵 기사 목록 전송
         if skipped:
             await update.message.reply_text(
                 format_skipped_articles(skipped), parse_mode="HTML", disable_web_page_preview=True,
@@ -192,33 +191,30 @@ async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         today = datetime.now(UTC).strftime("%Y-%m-%d")
         department = journalist["department"]
 
-        # 캐시 확인
         cache_id, is_new = await repo.get_or_create_report_cache(db, journalist["id"], today)
 
         existing_items = []
         if not is_new:
             existing_items = await repo.get_report_items_by_cache(db, cache_id)
 
-        # 캐시 행은 있지만 items가 비어있으면 시나리오 A로 취급
         is_scenario_a = is_new or len(existing_items) == 0
-
-        # 최근 태그 로드
         recent_tags = await repo.get_recent_report_tags(db, journalist["id"], days=3)
 
-        # 에이전트 실행
-        try:
-            results = await run_report_agent(
-                api_key=journalist["api_key"],
-                department=department,
-                date=today,
-                recent_tags=recent_tags,
-                existing_items=existing_items if not is_scenario_a else None,
-            )
-        except Exception as e:
-            logger.error("report_agent 실행 실패: %s", e, exc_info=True)
-            await update.message.reply_text(f"브리핑 생성 중 오류가 발생했습니다: {e}")
-            return
+        async with _pipeline_semaphore:
+            try:
+                results = await run_report_agent(
+                    api_key=journalist["api_key"],
+                    department=department,
+                    date=today,
+                    recent_tags=recent_tags,
+                    existing_items=existing_items if not is_scenario_a else None,
+                )
+            except Exception as e:
+                logger.error("report_agent 실행 실패: %s", e, exc_info=True)
+                await update.message.reply_text(f"브리핑 생성 중 오류가 발생했습니다: {e}")
+                return
 
+        # 결과 전송 (세마포어 해제 후)
         if is_scenario_a:
             await _handle_report_scenario_a(
                 update.message.reply_text, db, cache_id, department, today, results,

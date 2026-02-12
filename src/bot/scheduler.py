@@ -13,6 +13,7 @@ from src.agents.report_agent import run_report_agent
 from src.bot.handlers import (
     _run_check_pipeline,
     _user_locks,
+    _pipeline_semaphore,
     _handle_report_scenario_a,
     _handle_report_scenario_b,
 )
@@ -50,12 +51,13 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
 
     async with lock:
-        try:
-            results, since, now = await _run_check_pipeline(db, journalist)
-        except Exception as e:
-            logger.error("자동 check 실패 (journalist=%d): %s", journalist_id, e, exc_info=True)
-            await send_fn(f"[자동 체크] 오류: {e}")
-            return
+        async with _pipeline_semaphore:
+            try:
+                results, since, now = await _run_check_pipeline(db, journalist)
+            except Exception as e:
+                logger.error("자동 check 실패 (journalist=%d): %s", journalist_id, e, exc_info=True)
+                await send_fn(f"[자동 체크] 오류: {e}")
+                return
 
         if results is None:
             await send_fn(format_no_results())
@@ -117,19 +119,21 @@ async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         recent_tags = await repo.get_recent_report_tags(db, journalist["id"], days=3)
 
-        try:
-            results = await run_report_agent(
-                api_key=journalist["api_key"],
-                department=department,
-                date=today,
-                recent_tags=recent_tags,
-                existing_items=existing_items if not is_scenario_a else None,
-            )
-        except Exception as e:
-            logger.error("자동 report 실패 (journalist=%d): %s", journalist_id, e, exc_info=True)
-            await send_fn(f"[자동 브리핑] 오류: {e}")
-            return
+        async with _pipeline_semaphore:
+            try:
+                results = await run_report_agent(
+                    api_key=journalist["api_key"],
+                    department=department,
+                    date=today,
+                    recent_tags=recent_tags,
+                    existing_items=existing_items if not is_scenario_a else None,
+                )
+            except Exception as e:
+                logger.error("자동 report 실패 (journalist=%d): %s", journalist_id, e, exc_info=True)
+                await send_fn(f"[자동 브리핑] 오류: {e}")
+                return
 
+        # 결과 전송 (세마포어 해제 후)
         if is_scenario_a:
             await _handle_report_scenario_a(
                 send_fn, db, cache_id, department, today, results,

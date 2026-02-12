@@ -17,7 +17,7 @@ DB_PATH: str = os.environ.get("DB_PATH", str(BASE_DIR / "data" / "tasa-check.db"
 CHECK_MAX_WINDOW_SECONDS: int = 3 * 60 * 60
 
 # 캐시 보관 기간 (일)
-CACHE_RETENTION_DAYS: int = 14
+CACHE_RETENTION_DAYS: int = 5
 
 # 부서별 프로필 (취재 영역 + 중요도 판단 기준)
 DEPARTMENT_PROFILES: dict[str, dict] = {
