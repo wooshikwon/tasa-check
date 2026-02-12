@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import re
-from datetime import UTC, datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 from telegram import Update
 from telegram.ext import Application, ContextTypes
@@ -115,7 +115,7 @@ async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
         now_kst = datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
         await send_fn(f"─────\nschedule 자동 실행 ({now_kst} KST)")
 
-        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        today = datetime.now(_KST).strftime("%Y-%m-%d")
         department = journalist["department"]
 
         cache_id, is_new = await repo.get_or_create_report_cache(db, journalist["id"], today)

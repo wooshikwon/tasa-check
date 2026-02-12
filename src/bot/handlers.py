@@ -4,6 +4,8 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta, timezone
 
+_KST = timezone(timedelta(hours=9))
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
@@ -280,7 +282,7 @@ async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     async with lock:
         await update.message.reply_text("브리핑 생성 중...")
 
-        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        today = datetime.now(_KST).strftime("%Y-%m-%d")
         department = journalist["department"]
 
         cache_id, is_new = await repo.get_or_create_report_cache(db, journalist["id"], today)

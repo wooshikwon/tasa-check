@@ -1,5 +1,7 @@
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
+
+_KST = timezone(timedelta(hours=9))
 
 import aiosqlite
 from cryptography.fernet import Fernet
@@ -346,7 +348,7 @@ async def get_today_report_items(
     journalist_id: int,
 ) -> list[dict]:
     """당일 report_items를 조회한다. /check의 맥락 로드용."""
-    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    today = datetime.now(_KST).strftime("%Y-%m-%d")
     cursor = await db.execute(
         """
         SELECT ri.* FROM report_items ri
