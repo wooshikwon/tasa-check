@@ -89,6 +89,36 @@ SINGLE_PARAGRAPH_HTML = """
 </html>
 """
 
+# 소제목 + 사진 + 본문 구조 (네이버 뉴스 전형적 패턴)
+SUBHEADING_WITH_PHOTO_HTML = """
+<html>
+<body>
+<article id="dic_area">
+  <p><b>검찰, 대대적 수사 착수</b></p>
+  <span class="end_photo_org"><img src="photo.jpg"><em>사진 캡션</em></span>
+  <p>서울중앙지검 형사부는 15일 대규모 압수수색을 실시했다고 밝혔다.</p>
+  <p>이번 수사는 지난달 금융감독원 고발로 시작됐으며 피의자 3명이 소환 예정이다.</p>
+  <p>검찰 관계자는 "수사 범위를 확대할 계획"이라고 말했다.</p>
+</article>
+</body>
+</html>
+"""
+
+# 특수 마커 소제목 포함
+MARKER_SUBHEADING_HTML = """
+<html>
+<body>
+<article id="dic_area">
+  <p>▶ 수사 배경과 경위</p>
+  <p>서울경찰청은 지난 10일부터 내사에 착수해 관련자 5명을 확인했다고 밝혔다.</p>
+  <p>■ 향후 수사 계획</p>
+  <p>경찰은 추가 압수수색과 관계자 소환을 계획하고 있는 것으로 전해졌다.</p>
+  <p>이 사건은 시민단체의 고발로 수사가 시작된 것으로 알려졌다.</p>
+</article>
+</body>
+</html>
+"""
+
 
 # ---------------------------------------------------------------------------
 # _parse_article_body 단위 테스트
@@ -99,13 +129,14 @@ class TestParseArticleBody:
     """HTML 파싱 및 문단 추출 검증."""
 
     def test_dic_area_p_tags(self):
-        """article#dic_area의 <p> 태그에서 첫 2문단만 추출한다."""
+        """article#dic_area의 <p> 태그에서 첫 3문단을 추출한다."""
         result = _parse_article_body(ARTICLE_DIC_AREA_HTML)
         assert result is not None
         paragraphs = result.split("\n")
-        assert len(paragraphs) == 2
+        assert len(paragraphs) == 3
         assert "서부지검" in paragraphs[0]
         assert "횡령" in paragraphs[1]
+        assert "내부 고발" in paragraphs[2]
 
     def test_newsct_article_container(self):
         """div#newsct_article 컨테이너에서도 정상 추출한다."""
@@ -120,9 +151,10 @@ class TestParseArticleBody:
         result = _parse_article_body(NO_P_TAGS_HTML)
         assert result is not None
         paragraphs = result.split("\n")
-        assert len(paragraphs) == 2
+        assert len(paragraphs) == 3
         assert "본회의" in paragraphs[0]
         assert "찬성" in paragraphs[1]
+        assert "야당" in paragraphs[2]
 
     def test_no_container_returns_none(self):
         """기사 본문 컨테이너가 없으면 None을 반환한다."""
@@ -139,6 +171,27 @@ class TestParseArticleBody:
         paragraphs = result.split("\n")
         assert len(paragraphs) == 1
         assert "대법원" in paragraphs[0]
+
+    def test_skip_bold_subheading(self):
+        """볼드 소제목과 사진 캡션을 건너뛰고 본문만 추출한다."""
+        result = _parse_article_body(SUBHEADING_WITH_PHOTO_HTML)
+        assert result is not None
+        paragraphs = result.split("\n")
+        assert len(paragraphs) == 3
+        # 소제목 "검찰, 대대적 수사 착수"가 포함되지 않아야 함
+        assert "대대적 수사 착수" not in result
+        assert "서울중앙지검" in paragraphs[0]
+
+    def test_skip_marker_subheading(self):
+        """▶, ■ 등 특수 마커 소제목을 건너뛰고 본문만 추출한다."""
+        result = _parse_article_body(MARKER_SUBHEADING_HTML)
+        assert result is not None
+        paragraphs = result.split("\n")
+        assert len(paragraphs) == 3
+        # 마커 소제목이 포함되지 않아야 함
+        assert "▶" not in result
+        assert "■" not in result
+        assert "서울경찰청" in paragraphs[0]
 
 
 # ---------------------------------------------------------------------------

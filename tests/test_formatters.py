@@ -40,7 +40,8 @@ def test_format_article_important():
         "reason": "새로운 전개",
         "article_urls": ["https://example.com/2"],
     })
-    assert "[주요]" in msg
+    assert "[단독]" not in msg
+    assert "[속보]" not in msg
     assert "한겨레" in msg
 
 

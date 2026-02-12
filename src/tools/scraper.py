@@ -21,13 +21,31 @@ _HEADERS = {
     ),
 }
 _MAX_PARAGRAPHS = 3
+_SUBHEADING_MARKERS = set("▶■◆●△▷▲►◇□★☆※➤")
+
+
+def _is_subheading(text: str, tag=None) -> bool:
+    """소제목 여부를 판단한다.
+
+    볼드 처리된 짧은 텍스트나 특수 마커(▶, ■ 등)로 시작하는 텍스트를 소제목으로 간주.
+    """
+    if not text:
+        return True
+    if text[0] in _SUBHEADING_MARKERS:
+        return True
+    # 전체가 볼드이고 짧은 텍스트 → 소제목
+    if tag is not None and len(text) < 50:
+        bold = tag.find(["b", "strong"])
+        if bold and bold.get_text(strip=True) == text:
+            return True
+    return False
 
 
 def _parse_article_body(html: str) -> str | None:
-    """HTML에서 기사 본문 첫 1~2문단을 추출한다.
+    """HTML에서 기사 본문 첫 3문단을 추출한다.
 
-    네이버 뉴스 기사 컨테이너를 탐색하고, 내부 텍스트를 문단 단위로 분리하여
-    앞부분만 반환한다.
+    네이버 뉴스 기사 구조(소제목 → 사진 → 본문)를 고려하여
+    소제목과 사진 캡션을 건너뛰고 실제 본문 문단만 가져온다.
     """
     soup = BeautifulSoup(html, "html.parser")
 
@@ -38,12 +56,20 @@ def _parse_article_body(html: str) -> str | None:
     if container is None:
         return None
 
-    # <p> 태그에서 문단 추출 시도
+    # <p> 태그에서 문단 추출 (소제목·캡션 제외)
     paragraphs: list[str] = []
     for p_tag in container.find_all("p"):
+        # 사진/이미지 래퍼 안의 <p>는 캡션이므로 건너뜀
+        if p_tag.find_parent(
+            class_=lambda c: c and any(k in c for k in ("photo", "img", "vod")),
+        ):
+            continue
         text = p_tag.get_text(strip=True)
-        if text:
-            paragraphs.append(text)
+        if not text:
+            continue
+        if _is_subheading(text, p_tag):
+            continue
+        paragraphs.append(text)
         if len(paragraphs) >= _MAX_PARAGRAPHS:
             break
 
@@ -52,8 +78,11 @@ def _parse_article_body(html: str) -> str | None:
         raw_text = container.get_text(separator="\n", strip=True)
         for line in raw_text.split("\n"):
             line = line.strip()
-            if line:
-                paragraphs.append(line)
+            if not line:
+                continue
+            if _is_subheading(line):
+                continue
+            paragraphs.append(line)
             if len(paragraphs) >= _MAX_PARAGRAPHS:
                 break
 
