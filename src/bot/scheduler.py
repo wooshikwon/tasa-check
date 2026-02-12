@@ -9,9 +9,9 @@ from telegram import Update
 from telegram.ext import Application, ContextTypes
 
 from src.storage import repository as repo
-from src.agents.report_agent import run_report_agent
 from src.bot.handlers import (
     _run_check_pipeline,
+    _run_report_pipeline,
     _user_locks,
     _pipeline_semaphore,
     _handle_report_scenario_a,
@@ -51,6 +51,9 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
 
     async with lock:
+        now_kst = datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
+        await send_fn(f"─────\nschedule 자동 실행 ({now_kst} KST)")
+
         async with _pipeline_semaphore:
             try:
                 results, since, now = await _run_check_pipeline(db, journalist)
@@ -74,7 +77,8 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
             format_check_header(len(results), len(reported), since, now),
             parse_mode="HTML",
         )
-        for article in reported:
+        sorted_reported = sorted(reported, key=lambda r: r.get("category") != "exclusive")
+        for article in sorted_reported:
             await send_fn(
                 format_article_message(article),
                 parse_mode="HTML",
@@ -108,6 +112,9 @@ async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
 
     async with lock:
+        now_kst = datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
+        await send_fn(f"─────\nschedule 자동 실행 ({now_kst} KST)")
+
         today = datetime.now(UTC).strftime("%Y-%m-%d")
         department = journalist["department"]
 
@@ -117,21 +124,20 @@ async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
             existing_items = await repo.get_report_items_by_cache(db, cache_id)
         is_scenario_a = is_new or len(existing_items) == 0
 
-        recent_tags = await repo.get_recent_report_tags(db, journalist["id"], days=3)
-
         async with _pipeline_semaphore:
             try:
-                results = await run_report_agent(
-                    api_key=journalist["api_key"],
-                    department=department,
-                    date=today,
-                    recent_tags=recent_tags,
+                results = await _run_report_pipeline(
+                    db, journalist,
                     existing_items=existing_items if not is_scenario_a else None,
                 )
             except Exception as e:
                 logger.error("자동 report 실패 (journalist=%d): %s", journalist_id, e, exc_info=True)
                 await send_fn(f"[자동 브리핑] 오류: {e}")
                 return
+
+        if results is None:
+            await send_fn("관련 뉴스를 찾지 못했습니다.")
+            return
 
         # 결과 전송 (세마포어 해제 후)
         if is_scenario_a:

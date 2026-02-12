@@ -7,12 +7,15 @@ from datetime import UTC, datetime, timedelta, timezone
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from src.config import CHECK_MAX_WINDOW_SECONDS, DEPARTMENTS, ADMIN_TELEGRAM_ID
+from src.config import (
+    CHECK_MAX_WINDOW_SECONDS, REPORT_MAX_WINDOW_SECONDS,
+    DEPARTMENTS, DEPARTMENT_PROFILES, ADMIN_TELEGRAM_ID,
+)
 from src.tools.search import search_news
 from src.tools.scraper import fetch_articles_batch
 from src.filters.publisher import filter_by_publisher, get_publisher_name
 from src.agents.check_agent import analyze_articles
-from src.agents.report_agent import run_report_agent
+from src.agents.report_agent import filter_articles, analyze_report_articles
 from src.storage import repository as repo
 from src.bot.formatters import (
     format_check_header, format_article_message, format_no_results,
@@ -83,7 +86,7 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
         })
 
     # 이전 check 보고 이력 로드
-    history = await repo.get_recent_reported_articles(db, journalist["id"], hours=24)
+    history = await repo.get_recent_reported_articles(db, journalist["id"], hours=72)
 
     # Claude API 분석
     results = await analyze_articles(
@@ -106,11 +109,98 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
             r["article_urls"] = [articles_for_analysis[i - 1]["url"] for i in valid_sources]
             r["merged_from"] = [articles_for_analysis[i - 1]["url"] for i in valid_merged]
             if valid_sources:
-                r["publisher"] = articles_for_analysis[valid_sources[0] - 1]["publisher"]
+                src = articles_for_analysis[valid_sources[0] - 1]
+                r["publisher"] = src["publisher"]
+                pub_date = src.get("pubDate", "")
+                r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
             elif not r.get("publisher"):
                 r["publisher"] = ""
 
     return results, since, now
+
+
+async def _run_report_pipeline(
+    db, journalist: dict, existing_items: list[dict] | None = None,
+) -> list[dict] | None:
+    """네이버 검색 → 언론사 필터 → LLM 필터 → 본문 수집 → Claude 분석 파이프라인.
+
+    Returns:
+        브리핑 항목 리스트. 수집 기사가 없으면 None.
+    """
+    now = datetime.now(UTC)
+    since = now - timedelta(seconds=REPORT_MAX_WINDOW_SECONDS)
+    department = journalist["department"]
+    dept_label = department if department.endswith("부") else f"{department}부"
+
+    profile = DEPARTMENT_PROFILES.get(dept_label, {})
+    report_keywords = profile.get("report_keywords", [])
+    if not report_keywords:
+        return None
+
+    # 네이버 API 수집 (report는 400건 상한)
+    raw_articles = await search_news(report_keywords, since, max_results=400)
+    if not raw_articles:
+        return None
+
+    # 언론사 필터
+    filtered = filter_by_publisher(raw_articles)
+    if not filtered:
+        return None
+
+    # LLM 필터 (Haiku) — 제목+description 기반
+    filtered = await filter_articles(journalist["api_key"], filtered, department)
+    if not filtered:
+        return None
+
+    # 본문 수집 (첫 1~2문단)
+    urls = [a["link"] for a in filtered]
+    bodies = await fetch_articles_batch(urls)
+
+    # 분석용 데이터 조립
+    articles_for_analysis = []
+    for a in filtered:
+        publisher = get_publisher_name(a["originallink"]) or ""
+        body = bodies.get(a["link"], "") or ""
+        pub_date_str = (
+            a["pubDate"].strftime("%Y-%m-%d %H:%M")
+            if hasattr(a["pubDate"], "strftime")
+            else str(a["pubDate"])
+        )
+        articles_for_analysis.append({
+            "title": a["title"],
+            "publisher": publisher,
+            "body": body,
+            "originallink": a["originallink"],
+            "pubDate": pub_date_str,
+        })
+
+    # 이전 report 이력 (2일치)
+    report_history = await repo.get_recent_report_items(db, journalist["id"])
+
+    # Claude 분석
+    results = await analyze_report_articles(
+        api_key=journalist["api_key"],
+        articles=articles_for_analysis,
+        report_history=report_history,
+        existing_items=existing_items,
+        department=department,
+    )
+
+    # source_indices → URL, 언론사, 배포시각 역매핑
+    if results:
+        n = len(articles_for_analysis)
+        for r in results:
+            source_indices = r.pop("source_indices", [])
+            valid_sources = [i for i in source_indices if 1 <= i <= n]
+            if valid_sources:
+                src = articles_for_analysis[valid_sources[0] - 1]
+                if not r.get("url"):
+                    r["url"] = src["originallink"]
+                r["publisher"] = src["publisher"]
+                pub_date = src.get("pubDate", "")
+                r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
+
+    return results
 
 
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -159,7 +249,9 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             format_check_header(total, important, since, now), parse_mode="HTML",
         )
 
-        for article in reported:
+        # 단독 기사를 앞에 정렬
+        sorted_reported = sorted(reported, key=lambda r: r.get("category") != "exclusive")
+        for article in sorted_reported:
             msg = format_article_message(article)
             await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
 
@@ -198,21 +290,21 @@ async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             existing_items = await repo.get_report_items_by_cache(db, cache_id)
 
         is_scenario_a = is_new or len(existing_items) == 0
-        recent_tags = await repo.get_recent_report_tags(db, journalist["id"], days=3)
 
         async with _pipeline_semaphore:
             try:
-                results = await run_report_agent(
-                    api_key=journalist["api_key"],
-                    department=department,
-                    date=today,
-                    recent_tags=recent_tags,
+                results = await _run_report_pipeline(
+                    db, journalist,
                     existing_items=existing_items if not is_scenario_a else None,
                 )
             except Exception as e:
-                logger.error("report_agent 실행 실패: %s", e, exc_info=True)
+                logger.error("report 파이프라인 실패: %s", e, exc_info=True)
                 await update.message.reply_text(f"브리핑 생성 중 오류가 발생했습니다: {e}")
                 return
+
+        if results is None:
+            await update.message.reply_text("관련 뉴스를 찾지 못했습니다.")
+            return
 
         # 결과 전송 (세마포어 해제 후)
         if is_scenario_a:
@@ -270,10 +362,14 @@ async def _handle_report_scenario_b(
     for existing in existing_items:
         mod = delta_by_item_id.get(existing["id"])
         if mod:
-            # 수정된 항목: 새 요약으로 교체
+            # 수정된 항목: 새 요약 + reason/exclusive/tags 갱신
             merged = {**existing, "summary": mod["summary"], "action": "modified"}
             if mod.get("tags"):
                 merged["tags"] = mod["tags"]
+            if mod.get("reason"):
+                merged["reason"] = mod["reason"]
+            if "exclusive" in mod:
+                merged["exclusive"] = mod["exclusive"]
             merged_items.append(merged)
             modified_ids.add(existing["id"])
         else:
@@ -288,7 +384,12 @@ async def _handle_report_scenario_b(
     if added:
         await repo.save_report_items(db, cache_id, added)
     for item_id, mod in delta_by_item_id.items():
-        await repo.update_report_item(db, item_id, mod["summary"])
+        await repo.update_report_item(
+            db, item_id, mod["summary"],
+            reason=mod.get("reason"),
+            exclusive=mod.get("exclusive"),
+            tags=mod.get("tags"),
+        )
 
     # 변경 건수 계산
     modified_count = len(modified_ids)

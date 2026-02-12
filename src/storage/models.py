@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS report_items (
     tags TEXT NOT NULL,              -- JSON 배열
     category TEXT NOT NULL,          -- "follow_up" / "new"
     prev_reference TEXT,
+    reason TEXT DEFAULT '',          -- 선택 사유
+    exclusive INTEGER DEFAULT 0,    -- [단독] 여부 (0/1)
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -59,10 +61,16 @@ async def init_db(db_path: str) -> aiosqlite.Connection:
     db = await aiosqlite.connect(db_path)
     db.row_factory = aiosqlite.Row
     await db.executescript(DDL)
-    # 기존 DB 마이그레이션: reason 컬럼 추가
-    try:
-        await db.execute("ALTER TABLE reported_articles ADD COLUMN reason TEXT DEFAULT ''")
-    except Exception:
-        pass  # 이미 존재하면 무시
+    # 기존 DB 마이그레이션
+    _migrations = [
+        "ALTER TABLE reported_articles ADD COLUMN reason TEXT DEFAULT ''",
+        "ALTER TABLE report_items ADD COLUMN reason TEXT DEFAULT ''",
+        "ALTER TABLE report_items ADD COLUMN exclusive INTEGER DEFAULT 0",
+    ]
+    for sql in _migrations:
+        try:
+            await db.execute(sql)
+        except Exception:
+            pass  # 이미 존재하면 무시
     await db.commit()
     return db

@@ -113,6 +113,7 @@ async def _search_keyword(
 async def search_news(
     keywords: list[str],
     since: datetime,
+    max_results: int = _MAX_TOTAL_RESULTS,
 ) -> list[dict]:
     """키워드별로 네이버 뉴스를 검색하여 since 이후 기사만 반환.
 
@@ -122,9 +123,10 @@ async def search_news(
     Args:
         keywords: 검색 키워드 리스트. 각 키워드별로 개별 검색한다.
         since: 이 시각 이후에 발행된 기사만 포함.
+        max_results: 반환할 최대 기사 수. 기본값 200, report는 400 전달.
 
     Returns:
-        정제된 기사 dict 리스트 (최신순 정렬, 최대 200건).
+        정제된 기사 dict 리스트 (최신순 정렬, 최대 max_results건).
     """
     headers = {
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
@@ -158,4 +160,4 @@ async def search_news(
 
     results.sort(key=lambda x: x["pubDate"], reverse=True)
     logger.info("키워드 %d개 검색 완료: %d건 수집", len(keywords), len(results))
-    return results[:_MAX_TOTAL_RESULTS]
+    return results[:max_results]

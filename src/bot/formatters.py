@@ -28,7 +28,8 @@ def format_article_message(article: dict) -> str:
     category: "exclusive" / "important"
     """
     category = article.get("category", "")
-    tag = "[단독]" if category == "exclusive" else "[주요]"
+    tag_map = {"exclusive": "[단독]", "breaking": "[속보]"}
+    tag = tag_map.get(category, "")
     publisher = html_module.escape(article.get("publisher", ""))
     title = html_module.escape(article.get("title", ""))
     summary = html_module.escape(article.get("summary", ""))
@@ -38,8 +39,14 @@ def format_article_message(article: dict) -> str:
     urls = article.get("article_urls", [])
     url = urls[0] if urls else ""
 
+    pub_time = article.get("pub_time", "")
+
+    title_line = f"{tag} [{publisher}] {title}".strip()
+    if pub_time:
+        title_line += f" ({pub_time})"
+
     lines = [
-        f"<b>{tag} [{publisher}] {title}</b>",
+        f"<b>{title_line}</b>",
         "",
         summary,
     ]
@@ -144,22 +151,32 @@ def format_report_item(item: dict, scenario_b: bool = False) -> str:
         if action == "modified":
             tags.append("[수정]")
         elif action == "added":
-            tags.append("[추가]")
+            tags.append("[신규]")
     if category == "follow_up":
         tags.append("[후속]")
     tag = " ".join(tags)
 
+    publisher = html_module.escape(item.get("publisher", ""))
     title = html_module.escape(item.get("title", ""))
     summary = html_module.escape(item.get("summary", ""))
+    reason = html_module.escape(item.get("reason", ""))
+    pub_time = item.get("pub_time", "")
     url = item.get("url", "")
     prev_ref = item.get("prev_reference")
 
-    header = f"{tag} {title}".strip() if tag else title
+    # 태그 + [언론사] + 제목 + 시각
+    title_part = f"[{publisher}] {title}" if publisher else title
+    header = f"{tag} {title_part}".strip() if tag else title_part
+    if pub_time:
+        header += f" ({pub_time})"
     lines = [
         f"<b>{header}</b>",
         "",
         summary,
     ]
+    if reason:
+        lines.append("")
+        lines.append(f"-> <i>{reason}</i>")
     if prev_ref:
         lines.append("")
         lines.append(f"<i>(이전 전달: {html_module.escape(prev_ref)})</i>")
@@ -170,19 +187,3 @@ def format_report_item(item: dict, scenario_b: bool = False) -> str:
     return _truncate("\n".join(lines))
 
 
-def format_report_references(references: list[dict]) -> str:
-    """참고 기사들을 제목+링크로 모아 하나의 메시지로 포맷팅한다."""
-    lines = [f"<b>참고 {len(references)}건</b>"]
-    for item in references:
-        title = html_module.escape(item.get("title", ""))
-        url = item.get("url", "")
-        if url:
-            lines.append(f'- <a href="{html_module.escape(url)}">{title}</a>')
-        else:
-            lines.append(f"- {title}")
-    return _truncate("\n".join(lines))
-
-
-def format_report_no_update() -> str:
-    """시나리오 B 변경 없을 때 메시지."""
-    return "업데이트 없음. 이전 브리핑과 동일합니다."

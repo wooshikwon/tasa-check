@@ -1,10 +1,14 @@
 """formatters 단위 테스트."""
 
+from datetime import datetime, timezone
+
 from src.bot.formatters import format_check_header, format_article_message, format_no_results
 
 
 def test_format_check_header():
-    header = format_check_header(total=10, important=3)
+    since = datetime(2026, 2, 11, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 2, 11, 3, 0, tzinfo=timezone.utc)
+    header = format_check_header(total=10, important=3, since=since, now=now)
     assert "주요" in header
     assert "3" in header
     assert "전체 10건 중" in header
@@ -90,7 +94,6 @@ from src.bot.formatters import (
     format_report_header_a,
     format_report_header_b,
     format_report_item,
-    format_report_no_update,
 )
 
 
@@ -102,22 +105,41 @@ def test_format_report_header_a():
 
 
 def test_format_report_header_b():
-    header = format_report_header_b("사회", 2, 1)
-    assert "사회부 뉴스 업데이트" in header
+    header = format_report_header_b("사회", "2026-02-11", 10, 2, 1)
+    assert "사회부 주요 뉴스" in header
     assert "수정" in header
     assert "추가" in header
 
 
+def test_format_report_header_b_no_change():
+    header = format_report_header_b("사회", "2026-02-11", 5, 0, 0)
+    assert "변경 없음" in header
+
+
 def test_format_report_item_scenario_a_new():
+    """category=new, reason 포함 시 선별 사유가 표시된다."""
     msg = format_report_item({
         "title": "신규 기사 제목",
         "summary": "기사 요약 내용",
+        "reason": "핵심 수사 진전",
         "url": "https://example.com/1",
         "category": "new",
     })
-    assert "[신규]" in msg
     assert "신규 기사 제목" in msg
     assert "https://example.com/1" in msg
+    assert "핵심 수사 진전" in msg
+    assert "->" in msg
+
+
+def test_format_report_item_scenario_a_no_reason():
+    """reason이 없으면 사유 줄이 생략된다."""
+    msg = format_report_item({
+        "title": "기사 제목",
+        "summary": "요약",
+        "url": "https://example.com/1",
+        "category": "new",
+    })
+    assert "->" not in msg
 
 
 def test_format_report_item_scenario_a_follow_up():
@@ -132,6 +154,18 @@ def test_format_report_item_scenario_a_follow_up():
     assert "이전 전달:" in msg
 
 
+def test_format_report_item_exclusive():
+    """exclusive=True면 [단독] 태그가 표시된다."""
+    msg = format_report_item({
+        "title": "단독 기사",
+        "summary": "요약",
+        "url": "https://example.com/1",
+        "category": "new",
+        "exclusive": True,
+    })
+    assert "[단독]" in msg
+
+
 def test_format_report_item_scenario_b():
     msg = format_report_item({
         "action": "modified",
@@ -142,7 +176,3 @@ def test_format_report_item_scenario_b():
     }, scenario_b=True)
     assert "[수정]" in msg
     assert "수정 기사" in msg
-
-
-def test_format_report_no_update():
-    assert "업데이트 없음" in format_report_no_update()

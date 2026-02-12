@@ -213,25 +213,6 @@ async def test_update_report_item(db):
 
 
 @pytest.mark.asyncio
-async def test_get_recent_report_tags(db):
-    """최근 3일 report_items 태그가 중복 없이 추출된다."""
-    jid = await repo.upsert_journalist(db, "33", "사회부", ["a"], "k")
-    cache_id, _ = await repo.get_or_create_report_cache(db, jid, "2026-02-11")
-
-    await repo.save_report_items(db, cache_id, [
-        {"title": "A", "url": "u1", "summary": "s", "tags": ["서부지검", "수사"], "category": "new"},
-        {"title": "B", "url": "u2", "summary": "s", "tags": ["수사", "영등포"], "category": "new"},
-    ])
-
-    tags = await repo.get_recent_report_tags(db, jid, days=3)
-    assert "서부지검" in tags
-    assert "수사" in tags
-    assert "영등포" in tags
-    # 중복 없이
-    assert len(tags) == len(set(tags))
-
-
-@pytest.mark.asyncio
 async def test_get_today_report_items(db):
     """당일 report_items 조회 (/check 맥락 로드용)."""
     jid = await repo.upsert_journalist(db, "33", "사회부", ["a"], "k")

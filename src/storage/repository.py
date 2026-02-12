@@ -240,6 +240,8 @@ async def get_report_items_by_cache(
             "tags": json.loads(r["tags"]),
             "category": r["category"],
             "prev_reference": r["prev_reference"],
+            "reason": r["reason"] if "reason" in r.keys() else "",
+            "exclusive": bool(r["exclusive"]) if "exclusive" in r.keys() else False,
         }
         for r in rows
     ]
@@ -256,8 +258,9 @@ async def save_report_items(
         await db.execute(
             """
             INSERT INTO report_items
-                (report_cache_id, title, url, summary, tags, category, prev_reference, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (report_cache_id, title, url, summary, tags, category,
+                 prev_reference, reason, exclusive, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 report_cache_id,
@@ -267,6 +270,8 @@ async def save_report_items(
                 json.dumps(item.get("tags", []), ensure_ascii=False),
                 item["category"],
                 item.get("prev_reference"),
+                item.get("reason", ""),
+                int(item.get("exclusive", False)),
                 now,
                 now,
             ),
@@ -278,40 +283,62 @@ async def update_report_item(
     db: aiosqlite.Connection,
     item_id: int,
     summary: str,
+    reason: str | None = None,
+    exclusive: bool | None = None,
+    tags: list[str] | None = None,
 ) -> None:
-    """기존 report_item의 요약을 갱신한다. 시나리오 B [수정] 처리용."""
+    """기존 report_item을 갱신한다. 시나리오 B [수정] 처리용.
+
+    summary는 항상 갱신. reason/exclusive/tags는 값이 전달된 경우만 갱신.
+    """
     now = datetime.now(UTC).isoformat()
+    fields = ["summary = ?", "updated_at = ?"]
+    params: list = [summary, now]
+    if reason is not None:
+        fields.append("reason = ?")
+        params.append(reason)
+    if exclusive is not None:
+        fields.append("exclusive = ?")
+        params.append(int(exclusive))
+    if tags is not None:
+        fields.append("tags = ?")
+        params.append(json.dumps(tags, ensure_ascii=False))
+    params.append(item_id)
     await db.execute(
-        "UPDATE report_items SET summary = ?, updated_at = ? WHERE id = ?",
-        (summary, now, item_id),
+        f"UPDATE report_items SET {', '.join(fields)} WHERE id = ?",
+        params,
     )
     await db.commit()
 
 
-async def get_recent_report_tags(
+async def get_recent_report_items(
     db: aiosqlite.Connection,
     journalist_id: int,
-    days: int = 3,
-) -> list[str]:
-    """최근 N일간 report_items의 태그를 추출한다. 후속 검색 쿼리 생성용."""
+    days: int = 2,
+) -> list[dict]:
+    """최근 N일간 report_items를 조회한다. follow_up/new 판단용 이력."""
     cutoff = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
     cursor = await db.execute(
         """
-        SELECT ri.tags FROM report_items ri
+        SELECT ri.title, ri.summary, ri.tags, ri.category, ri.created_at
+        FROM report_items ri
         JOIN report_cache rc ON ri.report_cache_id = rc.id
         WHERE rc.journalist_id = ? AND rc.date >= ?
+        ORDER BY ri.created_at DESC
         """,
         (journalist_id, cutoff),
     )
     rows = await cursor.fetchall()
-    tags: list[str] = []
-    seen: set[str] = set()
-    for r in rows:
-        for tag in json.loads(r["tags"]):
-            if tag not in seen:
-                seen.add(tag)
-                tags.append(tag)
-    return tags
+    return [
+        {
+            "title": r["title"],
+            "summary": r["summary"],
+            "tags": json.loads(r["tags"]),
+            "category": r["category"],
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
 
 
 async def get_today_report_items(
