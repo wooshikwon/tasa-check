@@ -208,7 +208,7 @@ async def restore_schedules(app: Application, db) -> None:
 # --- /schedule 명령 핸들러 ---
 
 _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
-_MAX_TIMES = {"check": 5, "report": 3}
+_MAX_TIMES = {"check": 60, "report": 3}
 
 
 async def schedule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
