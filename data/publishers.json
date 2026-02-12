@@ -1,5 +1,5 @@
 {
-  "description": "주요 언론사 화이트리스트 (Top 23)",
+  "description": "주요 언론사 화이트리스트 (27개)",
   "publishers": [
     {
       "name": "조선일보",
@@ -115,6 +115,26 @@
       "name": "뉴스1",
       "domain": "news1.kr",
       "category": "통신사"
+    },
+    {
+      "name": "머니투데이",
+      "domain": "mt.co.kr",
+      "category": "경제지"
+    },
+    {
+      "name": "헤럴드경제",
+      "domain": "heraldcorp.com",
+      "category": "경제지"
+    },
+    {
+      "name": "아시아경제",
+      "domain": "asiae.co.kr",
+      "category": "경제지"
+    },
+    {
+      "name": "이데일리",
+      "domain": "edaily.co.kr",
+      "category": "경제지"
     }
   ]
 }
