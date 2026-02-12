@@ -69,7 +69,7 @@ async def get_journalist(db: aiosqlite.Connection, telegram_id: str) -> dict | N
 
 
 async def clear_journalist_data(db: aiosqlite.Connection, journalist_id: int) -> None:
-    """기자의 report/check/schedule 관련 데이터를 모두 삭제한다."""
+    """기자의 report/check 데이터를 삭제한다. 스케줄은 유지."""
     await db.execute(
         """
         DELETE FROM report_items WHERE report_cache_id IN (
@@ -80,7 +80,6 @@ async def clear_journalist_data(db: aiosqlite.Connection, journalist_id: int) ->
     )
     await db.execute("DELETE FROM report_cache WHERE journalist_id = ?", (journalist_id,))
     await db.execute("DELETE FROM reported_articles WHERE journalist_id = ?", (journalist_id,))
-    await db.execute("DELETE FROM schedules WHERE journalist_id = ?", (journalist_id,))
     await db.commit()
 
 
@@ -91,6 +90,22 @@ async def update_api_key(db: aiosqlite.Connection, telegram_id: str, api_key: st
         "UPDATE journalists SET api_key = ? WHERE telegram_id = ?",
         (encrypted_key, telegram_id),
     )
+    await db.commit()
+
+
+async def update_keywords(db: aiosqlite.Connection, telegram_id: str, keywords: list[str]) -> None:
+    """키워드를 변경하고 last_check_at을 초기화한다."""
+    keywords_json = json.dumps(keywords, ensure_ascii=False)
+    await db.execute(
+        "UPDATE journalists SET keywords = ?, last_check_at = NULL WHERE telegram_id = ?",
+        (keywords_json, telegram_id),
+    )
+    await db.commit()
+
+
+async def clear_check_data(db: aiosqlite.Connection, journalist_id: int) -> None:
+    """check 이력(reported_articles)만 삭제한다. report 이력은 유지."""
+    await db.execute("DELETE FROM reported_articles WHERE journalist_id = ?", (journalist_id,))
     await db.commit()
 
 

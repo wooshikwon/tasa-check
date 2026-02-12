@@ -19,7 +19,11 @@ from src.config import TELEGRAM_BOT_TOKEN, DB_PATH
 from src.storage.models import init_db
 from src.storage.repository import cleanup_old_data
 from src.bot.conversation import build_conversation_handler
-from src.bot.handlers import check_handler, report_handler, setkey_handler, setdivision_handler, setdivision_callback
+from src.bot.handlers import (
+    check_handler, report_handler,
+    set_apikey_handler, set_keyword_handler,
+    set_division_handler, set_division_callback,
+)
 from src.bot.scheduler import schedule_handler, restore_schedules
 
 logging.basicConfig(
@@ -65,12 +69,15 @@ def main() -> None:
     # /report 부서 뉴스 브리핑
     app.add_handler(CommandHandler("report", report_handler))
 
-    # /setkey API 키 변경
-    app.add_handler(CommandHandler("setkey", setkey_handler))
+    # /set_apikey API 키 변경
+    app.add_handler(CommandHandler("set_apikey", set_apikey_handler))
 
-    # /setdivision 부서 변경
-    app.add_handler(CommandHandler("setdivision", setdivision_handler))
-    app.add_handler(CallbackQueryHandler(setdivision_callback, pattern="^setdiv:"))
+    # /set_keyword 키워드 변경
+    app.add_handler(CommandHandler("set_keyword", set_keyword_handler))
+
+    # /set_division 부서 변경
+    app.add_handler(CommandHandler("set_division", set_division_handler))
+    app.add_handler(CallbackQueryHandler(set_division_callback, pattern="^setdiv:"))
 
     # /schedule 자동 실행 예약
     app.add_handler(CommandHandler("schedule", schedule_handler))

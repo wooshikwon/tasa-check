@@ -1,4 +1,4 @@
-"""/check, /report, /setkey, /setdivision 명령 핸들러."""
+"""/check, /report, /set_apikey, /set_division, /set_keyword 명령 핸들러."""
 
 import asyncio
 import logging
@@ -312,8 +312,8 @@ async def _handle_report_scenario_b(
         await send_fn(msg, parse_mode="HTML", disable_web_page_preview=True)
 
 
-async def setkey_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/setkey 명령 처리. API 키 변경."""
+async def set_apikey_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/set_apikey 명령 처리. API 키 변경."""
     db = context.bot_data["db"]
     telegram_id = str(update.effective_user.id)
 
@@ -322,7 +322,6 @@ async def setkey_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("프로필이 없습니다. /start로 등록해주세요.")
         return
 
-    # 인자로 키가 전달된 경우
     args = context.args
     if args:
         new_key = args[0]
@@ -340,13 +339,47 @@ async def setkey_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.effective_chat.send_message("API 키가 변경되었습니다.")
     else:
         await update.message.reply_text(
-            "사용법: /setkey sk-ant-your-new-key\n"
+            "사용법: /set_apikey sk-ant-your-new-key\n"
             "(입력 후 메시지가 자동 삭제됩니다)"
         )
 
 
-async def setdivision_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/setdivision 명령 처리. 부서 변경 InlineKeyboard 표시."""
+async def set_keyword_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/set_keyword 명령 처리. 키워드 변경 + check 이력 초기화."""
+    db = context.bot_data["db"]
+    telegram_id = str(update.effective_user.id)
+
+    journalist = await repo.get_journalist(db, telegram_id)
+    if not journalist:
+        await update.message.reply_text("프로필이 없습니다. /start로 등록해주세요.")
+        return
+
+    raw = " ".join(context.args) if context.args else ""
+    if not raw.strip():
+        current = ", ".join(journalist["keywords"])
+        await update.message.reply_text(
+            f"현재 키워드: {current}\n\n"
+            f"사용법: /set_keyword 서부지검, 서부지법"
+        )
+        return
+
+    keywords = [k.strip() for k in raw.split(",") if k.strip()]
+    if not keywords:
+        await update.message.reply_text("키워드를 1개 이상 입력해주세요. (쉼표 구분)")
+        return
+
+    await repo.update_keywords(db, telegram_id, keywords)
+    await repo.clear_check_data(db, journalist["id"])
+
+    keywords_str = ", ".join(keywords)
+    await update.message.reply_text(
+        f"키워드가 변경되었습니다: {keywords_str}\n"
+        f"체크 이력이 초기화되었습니다."
+    )
+
+
+async def set_division_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/set_division 명령 처리. 부서 변경 InlineKeyboard 표시."""
     db = context.bot_data["db"]
     telegram_id = str(update.effective_user.id)
 
@@ -368,10 +401,8 @@ async def setdivision_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
-async def setdivision_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def set_division_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """부서 변경 InlineKeyboard 콜백 처리."""
-    from src.bot.scheduler import unregister_jobs
-
     query = update.callback_query
     await query.answer()
 
@@ -388,12 +419,11 @@ async def setdivision_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text(f"이미 {new_dept} 소속입니다.")
         return
 
-    # 부서 변경 + 이전 맥락 삭제
+    # 부서 변경 + check/report 이력 삭제 (스케줄 유지)
     await repo.update_department(db, telegram_id, new_dept)
     await repo.clear_journalist_data(db, journalist["id"])
-    unregister_jobs(context.application, journalist["id"])
 
     await query.edit_message_text(
         f"부서가 {new_dept}(으)로 변경되었습니다.\n"
-        f"이전 체크/브리핑/스케줄 이력이 초기화되었습니다."
+        f"이전 체크/브리핑 이력이 초기화되었습니다."
     )
