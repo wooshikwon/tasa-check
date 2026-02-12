@@ -80,22 +80,21 @@ async def fetch_article_body(url: str) -> str | None:
         return None
 
 
-_MAX_CONCURRENT = 20
+# 전역 동시 스크래핑 제한 (모든 파이프라인이 공유)
+_scrape_semaphore = asyncio.Semaphore(50)
 
 
 async def fetch_articles_batch(urls: list[str]) -> dict[str, str | None]:
     """여러 URL의 기사 본문을 병렬로 가져온다.
 
     httpx.AsyncClient를 공유하여 연결을 재사용하고,
-    세마포어로 동시 요청 수를 제한한다.
+    전역 세마포어로 동시 요청 수를 제한한다.
     """
     if not urls:
         return {}
 
-    semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
-
     async def _fetch_one(client: httpx.AsyncClient, url: str) -> tuple[str, str | None]:
-        async with semaphore:
+        async with _scrape_semaphore:
             try:
                 resp = await client.get(url)
                 resp.raise_for_status()
