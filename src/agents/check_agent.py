@@ -6,11 +6,14 @@
 
 import json
 import logging
+from datetime import datetime, timezone, timedelta
 
 import anthropic
 from langfuse import get_client as get_langfuse
 
 from src.config import DEPARTMENT_PROFILES
+
+_KST = timezone(timedelta(hours=9))
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +77,17 @@ merged_indices: 동일 사안으로 병합된 다른 기사들의 번호 (없으
 """
 
 
+def _to_kst(iso_str: str) -> str:
+    """UTC ISO 문자열을 KST 'YYYY-MM-DD HH:MM' 형식으로 변환한다."""
+    if not iso_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso_str).replace(tzinfo=timezone.utc)
+        return dt.astimezone(_KST).strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return iso_str[:16]
+
+
 def _build_user_prompt(
     articles: list[dict],
     history: list[dict],
@@ -89,7 +103,7 @@ def _build_user_prompt(
     if reported_history:
         lines = ["[기자의 최근 보고 이력]"]
         for h in reported_history:
-            time_str = h["checked_at"][:16] if h.get("checked_at") else ""
+            time_str = _to_kst(h.get("checked_at", ""))
             facts = ", ".join(f"({j}) {f}" for j, f in enumerate(h["key_facts"], 1))
             lines.append(f"- {time_str} 보고: \"{h['topic_cluster']}\"")
             lines.append(f"  확인된 팩트: {facts}")
