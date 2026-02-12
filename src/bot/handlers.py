@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -459,7 +459,9 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         sched = f" | 스케줄 {u['schedule_count']}건" if u["schedule_count"] else ""
         last = ""
         if u["last_check_at"]:
-            last = f" | 최근 check: {u['last_check_at'][:16]}"
+            utc_dt = datetime.fromisoformat(u["last_check_at"]).replace(tzinfo=UTC)
+            kst_dt = utc_dt.astimezone(timezone(timedelta(hours=9)))
+            last = f" | 최근 check: {kst_dt.strftime('%Y-%m-%d %H:%M')}"
         lines.append(f"  {u['department']} | {kw}{sched}{last}")
 
     await update.message.reply_text("\n".join(lines))

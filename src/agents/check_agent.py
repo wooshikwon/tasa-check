@@ -61,33 +61,41 @@ skip 사유를 뒤집을 새로운 정보(공식 발표, 수사 진전, 복수 �
 
 [출력]
 submit_analysis 도구를 사용하여 결과를 제출하라.
-각 항목의 필드 규칙:
-- category: "exclusive" (단독) / "important" (주요) / "skip" (스킵)
+모든 기사를 빠짐없이 results 또는 skipped 중 하나에 분류해야 한다.
+동일 사안 병합 시 대표 1건만 남기되, 병합된 기사 번호도 빠짐없이 기재한다.
+
+results 배열 (단독/주요 기사):
+- category: "exclusive" (단독) / "important" (주요)
 - topic_cluster: 주제 식별자 (짧은 구문)
-- source_indices: 해당 항목의 대표 기사 번호 (위 [새로 수집된 기사] 목록의 번호)
-- merged_indices: 동일 사안으로 병합된 다른 기사들의 번호 (없으면 빈 배열)
-- title: 기사 제목 (skip 포함 모든 항목에 반드시 기재)
-- summary: 2~3문장 요약 (skip이면 빈 문자열)
-- reason: 주요 판단 근거 1문장 (skip이면 스킵 사유)
+- source_indices: 대표 기사 번호 ([새로 수집된 기사] 목록 번호)
+- merged_indices: 동일 사안으로 병합된 다른 기사 번호 (없으면 빈 배열)
+- title: 기사 제목
+- summary: 2~3문장 요약
+- reason: 주요 판단 근거 1문장
 - key_facts: 핵심 팩트 배열
+
+skipped 배열 (스킵 기사):
+- topic_cluster: 주제 식별자
+- source_indices: 대표 기사 번호 ([새로 수집된 기사] 목록 번호)
+- title: 기사 제목
+- reason: 스킵 사유
 """
 
 _ANALYSIS_TOOL = {
     "name": "submit_analysis",
-    "description": "기사 분석 결과를 제출한다.",
+    "description": "기사 분석 결과를 제출한다. 모든 기사를 results 또는 skipped에 빠짐없이 분류한다.",
     "input_schema": {
         "type": "object",
         "properties": {
             "results": {
                 "type": "array",
-                "description": "분석된 기사 항목 배열. skip 포함 모든 기사에 대해 항목을 생성한다.",
+                "description": "단독/주요 기사 항목 배열",
                 "items": {
                     "type": "object",
                     "properties": {
                         "category": {
                             "type": "string",
-                            "enum": ["exclusive", "important", "skip"],
-                            "description": "exclusive=단독, important=주요, skip=스킵",
+                            "enum": ["exclusive", "important"],
                         },
                         "topic_cluster": {
                             "type": "string",
@@ -96,29 +104,26 @@ _ANALYSIS_TOOL = {
                         "source_indices": {
                             "type": "array",
                             "items": {"type": "integer"},
-                            "description": "대표 기사 번호 ([새로 수집된 기사] 목록 번호)",
+                            "description": "대표 기사 번호",
                         },
                         "merged_indices": {
                             "type": "array",
                             "items": {"type": "integer"},
                             "description": "동일 사안으로 병합된 다른 기사 번호 (없으면 빈 배열)",
                         },
-                        "title": {
-                            "type": "string",
-                            "description": "기사 제목 (skip 포함 모든 항목에 반드시 기재)",
-                        },
+                        "title": {"type": "string"},
                         "summary": {
                             "type": "string",
-                            "description": "2~3문장 요약 (skip이면 빈 문자열)",
+                            "description": "2~3문장 요약",
                         },
                         "reason": {
                             "type": "string",
-                            "description": "주요 판단 근거 1문장 (skip이면 스킵 사유)",
+                            "description": "주요 판단 근거 1문장",
                         },
                         "key_facts": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "핵심 팩트 배열 (인물명, 기관명, 수치 등 구체적 사실)",
+                            "description": "핵심 팩트 배열",
                         },
                     },
                     "required": [
@@ -127,8 +132,32 @@ _ANALYSIS_TOOL = {
                     ],
                 },
             },
+            "skipped": {
+                "type": "array",
+                "description": "스킵 기사 항목 배열",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "topic_cluster": {
+                            "type": "string",
+                            "description": "주제 식별자 (짧은 구문)",
+                        },
+                        "source_indices": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": "대표 기사 번호",
+                        },
+                        "title": {"type": "string"},
+                        "reason": {
+                            "type": "string",
+                            "description": "스킵 사유",
+                        },
+                    },
+                    "required": ["topic_cluster", "source_indices", "title", "reason"],
+                },
+            },
         },
-        "required": ["results"],
+        "required": ["results", "skipped"],
     },
 }
 
@@ -236,8 +265,8 @@ async def analyze_articles(
         keywords: 기자의 취재 키워드 목록
 
     Returns:
-        분석 결과 리스트. 각 항목은 category, topic_cluster, source_indices,
-        merged_indices, title, summary, reason, key_facts 포함.
+        분석 결과 리스트 (주요 + 스킵 병합). 주요 항목은 전체 필드,
+        스킵 항목은 category, topic_cluster, source_indices, title, reason만 포함.
     """
     system_prompt = _build_system_prompt(keywords or [], department)
     user_prompt = _build_user_prompt(articles, history, department)
@@ -250,6 +279,7 @@ async def analyze_articles(
         message = await client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=16384,
+            temperature=0.0,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
             tools=[_ANALYSIS_TOOL],
@@ -264,12 +294,27 @@ async def analyze_articles(
         stop_reason, input_tokens, output_tokens,
     )
 
-    # tool_use 블록에서 결과 추출
+    # tool_use 블록에서 결과 추출 (results + skipped 병합)
     for block in message.content:
         if block.type == "tool_use" and block.name == "submit_analysis":
-            results = block.input.get("results", [])
-            logger.info("분석 결과: %d건", len(results))
-            return results
+            raw_input = block.input
+            raw_results = raw_input.get("results", [])
+            raw_skipped = raw_input.get("skipped", [])
+            results = [r for r in raw_results if isinstance(r, dict)]
+            skipped = [s for s in raw_skipped if isinstance(s, dict)]
+            if len(results) != len(raw_results) or len(skipped) != len(raw_skipped):
+                logger.warning(
+                    "타입 필터링 발생: results %d→%d, skipped %d→%d, raw_keys=%s",
+                    len(raw_results), len(results), len(raw_skipped), len(skipped),
+                    list(raw_input.keys()),
+                )
+            if not results and not skipped:
+                logger.warning("빈 결과 반환됨, tool input keys=%s", list(raw_input.keys()))
+            for s in skipped:
+                s["category"] = "skip"
+            combined = results + skipped
+            logger.info("분석 결과: 주요 %d건, 스킵 %d건", len(results), len(skipped))
+            return combined
 
     logger.error("tool_use 응답을 찾을 수 없음: stop_reason=%s", stop_reason)
     return []
