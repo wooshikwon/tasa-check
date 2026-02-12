@@ -112,15 +112,18 @@ def format_report_header_a(department: str, date: str, count: int) -> str:
     return f"<b>{label} 주요 뉴스</b> ({date}) - 총 <b>{count}</b>건"
 
 
-def format_report_header_b(department: str, modified: int, added: int) -> str:
-    """시나리오 B 헤더: 당일 재요청."""
+def format_report_header_b(department: str, date: str, total: int, modified: int, added: int) -> str:
+    """시나리오 B 헤더: 당일 재요청. 총 건수 + 변경 내역."""
     label = _dept_label(department)
-    now = datetime.now(_KST)
-    ts = now.strftime("%H:%M")
-    return (
-        f"<b>{label} 뉴스 업데이트</b> ({ts})\n"
-        f"수정 <b>{modified}</b>건, 추가 <b>{added}</b>건"
-    )
+    if modified > 0 or added > 0:
+        parts = []
+        if modified > 0:
+            parts.append(f"수정 {modified}건")
+        if added > 0:
+            parts.append(f"추가 {added}건")
+        change_str = ", ".join(parts)
+        return f"<b>{label} 주요 뉴스</b> ({date}) - 총 <b>{total}</b>건 ({change_str})"
+    return f"<b>{label} 주요 뉴스</b> ({date}) - 총 <b>{total}</b>건 (변경 없음)"
 
 
 def format_report_item(item: dict, scenario_b: bool = False) -> str:

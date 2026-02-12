@@ -289,19 +289,14 @@ async def _handle_report_scenario_b(
     added_count = len(added)
 
     # 헤더 전송
-    if modified_count > 0 or added_count > 0:
-        await update.message.reply_text(
-            format_report_header_b(department, modified_count, added_count),
-            parse_mode="HTML",
-        )
-    else:
-        await update.message.reply_text(
-            format_report_header_a(department, today, len(merged_items)) + "\n(변경 없음)",
-            parse_mode="HTML",
-        )
+    await update.message.reply_text(
+        format_report_header_b(department, today, len(merged_items), modified_count, added_count),
+        parse_mode="HTML",
+    )
 
-    # 후속 항목을 앞에 정렬 후 출력
-    sorted_items = sorted(merged_items, key=lambda r: r.get("category") != "follow_up")
+    # 수정/추가 항목을 앞에, 기존(unchanged) 항목을 뒤에 정렬
+    action_order = {"modified": 0, "added": 1, "unchanged": 2}
+    sorted_items = sorted(merged_items, key=lambda r: action_order.get(r.get("action", ""), 2))
     for item in sorted_items:
         msg = format_report_item(item, scenario_b=True)
         await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
