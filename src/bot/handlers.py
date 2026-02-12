@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 _user_locks: dict[str, asyncio.Lock] = {}
 
 # 전역 동시 파이프라인 제한 (1GB RAM 서버 OOM 방지)
-_pipeline_semaphore = asyncio.Semaphore(3)
+_pipeline_semaphore = asyncio.Semaphore(5)
 
 
 async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, datetime, datetime]:
