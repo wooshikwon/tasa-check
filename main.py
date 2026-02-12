@@ -24,6 +24,7 @@ from src.bot.handlers import (
     check_handler, report_handler,
     set_apikey_handler, set_keyword_handler,
     set_division_handler, set_division_callback,
+    stats_handler,
 )
 from src.bot.scheduler import schedule_handler, restore_schedules
 
@@ -93,6 +94,9 @@ def main() -> None:
     # /set_division 부서 변경
     app.add_handler(CommandHandler("set_division", set_division_handler))
     app.add_handler(CallbackQueryHandler(set_division_callback, pattern="^setdiv:"))
+
+    # /stats 관리자 전용 통계
+    app.add_handler(CommandHandler("stats", stats_handler))
 
     # /schedule 자동 실행 예약
     app.add_handler(CommandHandler("schedule", schedule_handler))

@@ -19,6 +19,9 @@ CHECK_MAX_WINDOW_SECONDS: int = 3 * 60 * 60
 # 캐시 보관 기간 (일)
 CACHE_RETENTION_DAYS: int = 5
 
+# 관리자 Telegram ID
+ADMIN_TELEGRAM_ID: str = "8571411084"
+
 # 부서별 프로필 (취재 영역 + 중요도 판단 기준)
 DEPARTMENT_PROFILES: dict[str, dict] = {
     "사회부": {

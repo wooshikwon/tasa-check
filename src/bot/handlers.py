@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from src.config import CHECK_MAX_WINDOW_SECONDS, DEPARTMENTS
+from src.config import CHECK_MAX_WINDOW_SECONDS, DEPARTMENTS, ADMIN_TELEGRAM_ID
 from src.tools.search import search_news
 from src.tools.scraper import fetch_articles_batch
 from src.filters.publisher import filter_by_publisher, get_publisher_name
@@ -423,3 +423,43 @@ async def set_division_callback(update: Update, context: ContextTypes.DEFAULT_TY
         f"부서가 {new_dept}(으)로 변경되었습니다.\n"
         f"이전 체크/브리핑 이력이 초기화되었습니다."
     )
+
+
+async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/stats 관리자 전용 통계 조회."""
+    telegram_id = str(update.effective_user.id)
+    if telegram_id != ADMIN_TELEGRAM_ID:
+        return
+
+    db = context.bot_data["db"]
+    stats = await repo.get_admin_stats(db)
+
+    lines = [f"전체 사용자: {stats['total_users']}명"]
+
+    # 부서별
+    if stats["dept_stats"]:
+        lines.append("")
+        lines.append("[부서별]")
+        for dept, cnt in stats["dept_stats"]:
+            lines.append(f"  {dept}: {cnt}명")
+
+    # 스케줄
+    check_cnt = stats["schedule_stats"].get("check", 0)
+    report_cnt = stats["schedule_stats"].get("report", 0)
+    lines.append("")
+    lines.append(f"[스케줄] {stats['schedule_users']}명 등록")
+    if check_cnt or report_cnt:
+        lines.append(f"  check {check_cnt}건 / report {report_cnt}건")
+
+    # 사용자 목록
+    lines.append("")
+    lines.append("[사용자]")
+    for u in stats["users"]:
+        kw = ", ".join(u["keywords"])
+        sched = f" | 스케줄 {u['schedule_count']}건" if u["schedule_count"] else ""
+        last = ""
+        if u["last_check_at"]:
+            last = f" | 최근 check: {u['last_check_at'][:16]}"
+        lines.append(f"  {u['department']} | {kw}{sched}{last}")
+
+    await update.message.reply_text("\n".join(lines))

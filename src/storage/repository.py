@@ -427,3 +427,55 @@ async def cleanup_old_data(db: aiosqlite.Connection) -> None:
         "DELETE FROM reported_articles WHERE checked_at < ?", (cutoff,)
     )
     await db.commit()
+
+
+# --- 관리자 통계 ---
+
+async def get_admin_stats(db: aiosqlite.Connection) -> dict:
+    """관리자용 전체 통계를 조회한다."""
+    # 전체 사용자 수
+    cur = await db.execute("SELECT COUNT(*) FROM journalists")
+    total_users = (await cur.fetchone())[0]
+
+    # 부서별 사용자 수
+    cur = await db.execute(
+        "SELECT department, COUNT(*) as cnt FROM journalists GROUP BY department ORDER BY cnt DESC"
+    )
+    dept_stats = [(r["department"], r["cnt"]) for r in await cur.fetchall()]
+
+    # 스케줄 등록 사용자 수
+    cur = await db.execute("SELECT COUNT(DISTINCT journalist_id) FROM schedules")
+    schedule_users = (await cur.fetchone())[0]
+
+    # 스케줄 총 건수 (check/report 별)
+    cur = await db.execute(
+        "SELECT command, COUNT(*) as cnt FROM schedules GROUP BY command"
+    )
+    schedule_stats = {r["command"]: r["cnt"] for r in await cur.fetchall()}
+
+    # 사용자별 상세
+    cur = await db.execute(
+        """
+        SELECT j.telegram_id, j.department, j.keywords, j.last_check_at, j.created_at,
+               (SELECT COUNT(*) FROM schedules s WHERE s.journalist_id = j.id) as schedule_count
+        FROM journalists j ORDER BY j.created_at
+        """
+    )
+    users = []
+    for r in await cur.fetchall():
+        users.append({
+            "telegram_id": r["telegram_id"],
+            "department": r["department"],
+            "keywords": json.loads(r["keywords"]),
+            "last_check_at": r["last_check_at"],
+            "created_at": r["created_at"],
+            "schedule_count": r["schedule_count"],
+        })
+
+    return {
+        "total_users": total_users,
+        "dept_stats": dept_stats,
+        "schedule_users": schedule_users,
+        "schedule_stats": schedule_stats,
+        "users": users,
+    }
