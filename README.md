@@ -19,7 +19,11 @@ tasa-check는 LLM이 기자의 키워드 및 부서와 관련된 뉴스를 수�
 | `/start` | 초기 등록. 부서, 취재 키워드, Anthropic API 키를 입력한다 |
 | `/check` | 타사 체크. 키워드 기반으로 최근 기사를 수집·분석하여 주요 기사를 전달한다 |
 | `/report` | 부서 브리핑. 부서 전체의 당일 주요 뉴스를 검색·정리하여 전달한다 |
-| `/setkey` | API 키 변경. `/setkey sk-ant-...` 형식으로 입력하면 메시지가 자동 삭제된다 |
+| `/schedule` | 자동 실행 예약. `/schedule check 09:00 12:00` 형식으로 설정한다 |
+| `/schedule off` | 예약 일괄 삭제 |
+| `/set_apikey` | API 키 변경. `/set_apikey sk-ant-...` 형식으로 입력하면 메시지가 자동 삭제된다 |
+| `/set_keyword` | 모니터링 키워드 변경. `/set_keyword 서부지검, 서부지법` 형식. 체크 이력이 초기화된다 |
+| `/set_division` | 부서 변경. 체크/브리핑 이력이 초기화된다 |
 
 ### /check vs /report
 

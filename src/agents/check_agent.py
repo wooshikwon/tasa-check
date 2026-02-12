@@ -4,7 +4,6 @@
 [단독]/[주요]/[스킵]을 분류하고, 요약과 판단 근거를 생성한다.
 """
 
-import json
 import logging
 from datetime import datetime, timezone, timedelta
 
@@ -31,8 +30,9 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 반드시 기사 내용이 위 키워드와 직접적으로 관련된 경우에만 판단 대상으로 삼는다.
 - "직접 관련"이란: 기사에 해당 키워드의 기관/장소/인물이 실제로 등장하거나, 해당 관할/소관 사안을 다루는 경우
 - 동일 분야라도 다른 기관/관할의 기사는 관련 없는 것으로 판단한다
-  예) 키워드가 "서부지법"인데 기사가 "서울중앙지법" 사건이면 → skip
-  예) 키워드가 "마포경찰서"인데 기사가 "강남경찰서" 사건이면 → skip
+- 키워드에 명시된 기관만 대상이다. 상위/하위/동급 다른 기관은 별개로 취급한다
+  예) "서울경찰청" → 충북경찰청, 경남경찰청 등 다른 지방청은 skip
+  예) "서부지법" → 서울중앙지법, 수원지법 등은 skip
 - 키워드와 무관한 기사는 기사 가치와 무관하게 반드시 skip 처리한다
 
 [주요 기사 판단 기준 - {dept_label}]
@@ -59,22 +59,78 @@ skip 사유를 뒤집을 새로운 정보(공식 발표, 수사 진전, 복수 �
 - 맥락 제공: 이 뉴스가 왜 중요한지 한 문장으로 짚는다
 - 사실 기반 작성, 추측/의견 배제
 
-[출력 형식]
-반드시 아래 JSON 배열로만 응답하라. JSON 외 텍스트는 포함하지 않는다.
-각 기사 항목:
-{{
-  "category": "exclusive" | "important" | "skip",
-  "topic_cluster": "주제 식별자 (짧은 구문)",
-  "source_indices": [대표 기사 번호],
-  "merged_indices": [병합된 다른 기사 번호] 또는 빈 배열,
-  "title": "기사 제목 (skip 포함 모든 항목에 반드시 기재)",
-  "summary": "2~3문장 요약 (skip이면 빈 문자열)",
-  "reason": "주요 판단 근거 1문장 (skip이면 스킵 사유)",
-  "key_facts": ["핵심 팩트1", "핵심 팩트2"]
-}}
-source_indices: 해당 항목의 대표 기사 번호 (위 [새로 수집된 기사] 목록의 번호)
-merged_indices: 동일 사안으로 병합된 다른 기사들의 번호 (없으면 빈 배열)
+[출력]
+submit_analysis 도구를 사용하여 결과를 제출하라.
+각 항목의 필드 규칙:
+- category: "exclusive" (단독) / "important" (주요) / "skip" (스킵)
+- topic_cluster: 주제 식별자 (짧은 구문)
+- source_indices: 해당 항목의 대표 기사 번호 (위 [새로 수집된 기사] 목록의 번호)
+- merged_indices: 동일 사안으로 병합된 다른 기사들의 번호 (없으면 빈 배열)
+- title: 기사 제목 (skip 포함 모든 항목에 반드시 기재)
+- summary: 2~3문장 요약 (skip이면 빈 문자열)
+- reason: 주요 판단 근거 1문장 (skip이면 스킵 사유)
+- key_facts: 핵심 팩트 배열
 """
+
+_ANALYSIS_TOOL = {
+    "name": "submit_analysis",
+    "description": "기사 분석 결과를 제출한다.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "results": {
+                "type": "array",
+                "description": "분석된 기사 항목 배열. skip 포함 모든 기사에 대해 항목을 생성한다.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "enum": ["exclusive", "important", "skip"],
+                            "description": "exclusive=단독, important=주요, skip=스킵",
+                        },
+                        "topic_cluster": {
+                            "type": "string",
+                            "description": "주제 식별자 (짧은 구문)",
+                        },
+                        "source_indices": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": "대표 기사 번호 ([새로 수집된 기사] 목록 번호)",
+                        },
+                        "merged_indices": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": "동일 사안으로 병합된 다른 기사 번호 (없으면 빈 배열)",
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "기사 제목 (skip 포함 모든 항목에 반드시 기재)",
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "2~3문장 요약 (skip이면 빈 문자열)",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "주요 판단 근거 1문장 (skip이면 스킵 사유)",
+                        },
+                        "key_facts": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "핵심 팩트 배열 (인물명, 기관명, 수치 등 구체적 사실)",
+                        },
+                    },
+                    "required": [
+                        "category", "topic_cluster", "source_indices",
+                        "merged_indices", "title", "summary", "reason", "key_facts",
+                    ],
+                },
+            },
+        },
+        "required": ["results"],
+    },
+}
 
 
 def _to_kst(iso_str: str) -> str:
@@ -142,49 +198,6 @@ def _build_user_prompt(
     return "\n\n".join(sections)
 
 
-def _parse_response(text: str) -> list[dict]:
-    """Claude 응답에서 JSON 배열을 파싱한다.
-
-    max_tokens로 잘린 경우 } 위치를 역순 탐색하여 마지막 완전한 객체까지 복구한다.
-    """
-    text = text.strip()
-    if "```" in text:
-        lines = text.split("\n")
-        lines = [l for l in lines if not l.startswith("```")]
-        text = "\n".join(lines).strip()
-
-    # JSON 배열 시작 위치
-    start = text.find("[")
-    if start == -1:
-        logger.error("JSON 배열을 찾을 수 없음: %s", text[:200])
-        return []
-    text = text[start:]
-
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    # 잘린 JSON 복구: } 위치를 오른쪽부터 역순으로 시도
-    search_end = len(text)
-    while search_end > 0:
-        pos = text.rfind("}", 0, search_end)
-        if pos == -1:
-            break
-        truncated = text[:pos + 1] + "]"
-        try:
-            result = json.loads(truncated)
-            if isinstance(result, list):
-                logger.warning("잘린 JSON 복구: 원본 %d자 → %d자, %d건 복구", len(text), len(truncated), len(result))
-                return result
-        except json.JSONDecodeError:
-            search_end = pos
-            continue
-
-    logger.error("JSON 파싱 실패: %s", text[:300])
-    return []
-
-
 def _dept_label(department: str) -> str:
     """부서명에 '부'가 없으면 붙인다."""
     return department if department.endswith("부") else f"{department}부"
@@ -213,7 +226,7 @@ async def analyze_articles(
     department: str,
     keywords: list[str] | None = None,
 ) -> list[dict]:
-    """Claude API로 기사를 분석한다.
+    """Claude API로 기사를 분석한다 (tool_use 방식).
 
     Args:
         api_key: 기자의 Anthropic API 키
@@ -239,7 +252,24 @@ async def analyze_articles(
             max_tokens=16384,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
+            tools=[_ANALYSIS_TOOL],
+            tool_choice={"type": "tool", "name": "submit_analysis"},
         )
 
-    response_text = message.content[0].text
-    return _parse_response(response_text)
+    stop_reason = message.stop_reason
+    input_tokens = message.usage.input_tokens
+    output_tokens = message.usage.output_tokens
+    logger.info(
+        "Claude 응답: stop_reason=%s, input=%d tokens, output=%d tokens",
+        stop_reason, input_tokens, output_tokens,
+    )
+
+    # tool_use 블록에서 결과 추출
+    for block in message.content:
+        if block.type == "tool_use" and block.name == "submit_analysis":
+            results = block.input.get("results", [])
+            logger.info("분석 결과: %d건", len(results))
+            return results
+
+    logger.error("tool_use 응답을 찾을 수 없음: stop_reason=%s", stop_reason)
+    return []

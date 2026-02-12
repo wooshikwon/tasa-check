@@ -19,6 +19,69 @@ logger = logging.getLogger(__name__)
 _KST = timezone(timedelta(hours=9))
 _MAX_AGENT_TURNS = 20
 
+_REPORT_TOOL = {
+    "name": "submit_report",
+    "description": "뉴스 브리핑 분석 결과를 제출한다. 모든 검색과 분석을 마친 후 사용.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "description": "브리핑 항목 배열. 첫 요청 시 최소 8개, 10개 이상 목표.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["modified", "added"],
+                            "description": "기존 캐시 대비 변경 유형 (업데이트 시나리오에서만 사용)",
+                        },
+                        "item_id": {
+                            "type": ["integer", "null"],
+                            "description": "기존 항목 ID (action이 modified일 때만, 나머지는 null)",
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "기사 제목",
+                        },
+                        "url": {
+                            "type": "string",
+                            "description": "기사 URL (네이버 뉴스 URL 우선)",
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "2~3줄 구체적 요약 (인물명, 수치, 일시 등 팩트 포함)",
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "주제 태그 배열",
+                        },
+                        "category": {
+                            "type": "string",
+                            "enum": ["follow_up", "new"],
+                            "description": "follow_up=이전 보도 후속, new=신규",
+                        },
+                        "exclusive": {
+                            "type": "boolean",
+                            "description": "[단독] 태그 또는 특정 언론사만 보도한 기사이면 true",
+                        },
+                        "prev_reference": {
+                            "type": ["string", "null"],
+                            "description": "follow_up이면 'YYYY-MM-DD \"이전 제목\"', new이면 null",
+                        },
+                    },
+                    "required": [
+                        "title", "url", "summary", "tags",
+                        "category", "exclusive", "prev_reference",
+                    ],
+                },
+            },
+        },
+        "required": ["items"],
+    },
+}
+
 TOOLS = [
     {
         "type": "web_search_20250305",
@@ -34,39 +97,34 @@ TOOLS = [
             "required": ["url"],
         },
     },
+    _REPORT_TOOL,
 ]
 
-_OUTPUT_SCHEMA_A = """\
-[
-  {
-    "title": "기사 제목",
-    "url": "기사 URL",
-    "summary": "2~3줄 구체적 요약 (인물명, 수치, 일시 등 팩트 포함)",
-    "tags": ["태그1", "태그2"],
-    "category": "follow_up" 또는 "new",
-    "exclusive": true 또는 false,
-    "prev_reference": "YYYY-MM-DD \\"이전 제목\\"" (follow_up만, new는 null)
-  }
-]
-- exclusive: 제목에 [단독] 태그가 있거나 특정 언론사만 보도한 기사이면 true
-- 최소 8개, 10개 이상 목표. 부족하면 추가 검색을 반드시 실행한다."""
+_OUTPUT_INSTRUCTIONS_A = """\
+모든 검색과 분석을 마친 후, submit_report 도구를 사용하여 결과를 제출하라.
+각 항목의 필드 규칙:
+- title: 기사 제목
+- url: 기사 URL (네이버 뉴스 URL 우선)
+- summary: 2~3줄 구체적 요약 (인물명, 수치, 일시 등 팩트 포함)
+- tags: 주제 태그 배열
+- category: "follow_up" (이전 보도 후속) 또는 "new" (신규)
+- exclusive: true ([단독] 태그 또는 특정 언론사만 보도) 또는 false
+- prev_reference: follow_up이면 "YYYY-MM-DD \\"이전 제목\\"", new이면 null
+최소 8개, 10개 이상 목표. 부족하면 추가 검색을 반드시 실행한다."""
 
-_OUTPUT_SCHEMA_B = """\
-[
-  {
-    "action": "modified" 또는 "added",
-    "item_id": 기존 항목 ID (modified만, added는 null),
-    "title": "기사 제목",
-    "url": "기사 URL",
-    "summary": "2~3줄 구체적 요약 (갱신 또는 신규)",
-    "tags": ["태그1", "태그2"],
-    "category": "follow_up" 또는 "new",
-    "exclusive": true 또는 false,
-    "prev_reference": null
-  }
-]
-- exclusive: 제목에 [단독] 태그가 있거나 특정 언론사만 보도한 기사이면 true
-변경 없는 기존 항목은 포함하지 않는다. 수정/추가 항목이 없으면 빈 배열 []을 반환."""
+_OUTPUT_INSTRUCTIONS_B = """\
+모든 검색과 분석을 마친 후, submit_report 도구를 사용하여 결과를 제출하라.
+각 항목의 필드 규칙:
+- action: "modified" (기존 항목 수정) 또는 "added" (신규 추가)
+- item_id: 기존 항목 ID (action이 modified일 때만, added는 null)
+- title: 기사 제목
+- url: 기사 URL (네이버 뉴스 URL 우선)
+- summary: 2~3줄 구체적 요약 (갱신 또는 신규, 인물명·수치·일시 등 팩트 포함)
+- tags: 주제 태그 배열
+- category: "follow_up" (이전 보도 후속) 또는 "new" (신규)
+- exclusive: true ([단독] 태그 또는 특정 언론사만 보도) 또는 false
+- prev_reference: null
+변경 없는 기존 항목은 포함하지 않는다. 수정/추가 항목이 없으면 빈 배열을 제출."""
 
 
 def _dept_label(department: str) -> str:
@@ -137,7 +195,7 @@ def _build_system_prompt(
             "5. 변경 없는 항목은 출력하지 않음\n"
             "6. 추가 항목은 적극적으로 찾는다. 기존 캐시가 부족했을 수 있다\n"
             "7. 각 항목마다 2~3줄의 구체적 요약 작성\n"
-            "8. 검색과 분석이 끝나면 아래 JSON 형식으로 최종 응답"
+            "8. 검색과 분석이 끝나면 submit_report 도구로 결과 제출"
         )
     else:
         sections.append(
@@ -148,7 +206,7 @@ def _build_system_prompt(
             "4. 신규: 연결 없는 새로운 뉴스\n"
             "5. 최소 8개, 10개 이상 목표. 부족하면 추가 검색 실행\n"
             "6. 각 항목마다 2~3줄의 구체적 요약 작성\n"
-            "7. 검색과 분석이 끝나면 아래 JSON 형식으로 최종 응답"
+            "7. 검색과 분석이 끝나면 submit_report 도구로 결과 제출"
         )
 
     # 부서별 취재 영역 + 중요도 판단 기준
@@ -193,14 +251,9 @@ def _build_system_prompt(
         "네이버 뉴스 URL이 없는 경우에만 언론사 원본 URL을 사용한다."
     )
 
-    # 출력 형식
-    schema = _OUTPUT_SCHEMA_B if is_scenario_b else _OUTPUT_SCHEMA_A
-    sections.append(
-        "[출력 형식]\n"
-        "모든 검색과 분석을 마친 후, 반드시 아래 JSON 배열로만 최종 응답하라. "
-        "JSON 외 텍스트는 포함하지 않는다.\n"
-        f"{schema}"
-    )
+    # 출력 지시
+    instructions = _OUTPUT_INSTRUCTIONS_B if is_scenario_b else _OUTPUT_INSTRUCTIONS_A
+    sections.append(f"[출력]\n{instructions}")
 
     return "\n\n".join(sections)
 
@@ -350,29 +403,28 @@ async def run_report_agent(
                 [getattr(b, "type", "?") for b in response.content],
             )
 
+            # submit_report 도구 호출 감지 → 구조화된 결과 추출
+            for block in response.content:
+                if getattr(block, "type", None) == "tool_use" and block.name == "submit_report":
+                    items = block.input.get("items", [])
+                    logger.info("submit_report로 결과 수신 (턴 %d): %d건", turn + 1, len(items))
+                    return items
+
+            # 최종 응답이 text인 경우 폴백 파싱
             if response.stop_reason == "end_turn":
-                # 여러 text 블록이 있을 수 있으므로 모두 결합
                 text_blocks = []
                 for block in response.content:
                     if getattr(block, "type", None) == "text":
                         text_blocks.append(block.text)
                 final_text = "\n".join(text_blocks)
-                logger.info("에이전트 루프 종료 (턴 %d), 텍스트 블록 %d개, 총 길이=%d", turn + 1, len(text_blocks), len(final_text))
-                logger.info("최종 텍스트 (마지막 2000자): %s", final_text[-2000:])
+                logger.info("텍스트 폴백 파싱 (턴 %d), 블록 %d개, 길이=%d", turn + 1, len(text_blocks), len(final_text))
                 return _parse_response(final_text)
 
+            # fetch_article 도구 호출 실행
             tool_results = await _execute_custom_tools(response)
 
             # web_search는 서버사이드 처리이므로 커스텀 도구 결과가 없을 수 있음
-            # 이 경우 응답에 텍스트가 있으면 최종 결과, 없으면 다음 턴 진행
             if not tool_results:
-                final_text = ""
-                for block in response.content:
-                    if getattr(block, "type", None) == "text":
-                        final_text = block.text
-                if final_text.strip() and response.stop_reason == "end_turn":
-                    return _parse_response(final_text)
-                # web_search 결과를 포함한 응답 → 다음 턴으로 계속
                 messages.append({"role": "assistant", "content": response.content})
                 continue
 
