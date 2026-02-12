@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS reported_articles (
     category TEXT NOT NULL,          -- "exclusive" / "important" / "skip"
     reason TEXT DEFAULT ''           -- 판단 근거 (skip이면 스킵 사유)
 );
+
+CREATE TABLE IF NOT EXISTS schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    journalist_id INTEGER NOT NULL REFERENCES journalists(id),
+    command TEXT NOT NULL,           -- "check" / "report"
+    time_kst TEXT NOT NULL,          -- "HH:MM" 형식
+    UNIQUE(journalist_id, command, time_kst)
+);
 """
 
 

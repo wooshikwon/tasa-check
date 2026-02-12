@@ -69,7 +69,7 @@ async def get_journalist(db: aiosqlite.Connection, telegram_id: str) -> dict | N
 
 
 async def clear_journalist_data(db: aiosqlite.Connection, journalist_id: int) -> None:
-    """기자의 report/check 관련 데이터를 모두 삭제한다."""
+    """기자의 report/check/schedule 관련 데이터를 모두 삭제한다."""
     await db.execute(
         """
         DELETE FROM report_items WHERE report_cache_id IN (
@@ -80,6 +80,7 @@ async def clear_journalist_data(db: aiosqlite.Connection, journalist_id: int) ->
     )
     await db.execute("DELETE FROM report_cache WHERE journalist_id = ?", (journalist_id,))
     await db.execute("DELETE FROM reported_articles WHERE journalist_id = ?", (journalist_id,))
+    await db.execute("DELETE FROM schedules WHERE journalist_id = ?", (journalist_id,))
     await db.commit()
 
 
@@ -89,6 +90,15 @@ async def update_api_key(db: aiosqlite.Connection, telegram_id: str, api_key: st
     await db.execute(
         "UPDATE journalists SET api_key = ? WHERE telegram_id = ?",
         (encrypted_key, telegram_id),
+    )
+    await db.commit()
+
+
+async def update_department(db: aiosqlite.Connection, telegram_id: str, department: str) -> None:
+    """부서를 변경하고 last_check_at을 초기화한다."""
+    await db.execute(
+        "UPDATE journalists SET department = ?, last_check_at = NULL WHERE telegram_id = ?",
+        (department, telegram_id),
     )
     await db.commit()
 
@@ -315,6 +325,71 @@ async def get_today_report_items(
         }
         for r in rows
     ]
+
+
+# --- schedules ---
+
+async def save_schedules(
+    db: aiosqlite.Connection,
+    journalist_id: int,
+    command: str,
+    times_kst: list[str],
+) -> None:
+    """해당 command의 기존 스케줄을 교체한다 (삭제 후 새로 저장)."""
+    await db.execute(
+        "DELETE FROM schedules WHERE journalist_id = ? AND command = ?",
+        (journalist_id, command),
+    )
+    for t in times_kst:
+        await db.execute(
+            "INSERT INTO schedules (journalist_id, command, time_kst) VALUES (?, ?, ?)",
+            (journalist_id, command, t),
+        )
+    await db.commit()
+
+
+async def get_schedules(
+    db: aiosqlite.Connection,
+    journalist_id: int,
+) -> list[dict]:
+    """사용자의 전체 스케줄을 조회한다."""
+    cursor = await db.execute(
+        "SELECT command, time_kst FROM schedules WHERE journalist_id = ? ORDER BY command, time_kst",
+        (journalist_id,),
+    )
+    rows = await cursor.fetchall()
+    return [{"command": r["command"], "time_kst": r["time_kst"]} for r in rows]
+
+
+async def get_all_schedules(db: aiosqlite.Connection) -> list[dict]:
+    """전체 사용자의 스케줄을 조회한다. 서버 시작 시 JobQueue 복원용."""
+    cursor = await db.execute(
+        """
+        SELECT s.journalist_id, s.command, s.time_kst, j.telegram_id
+        FROM schedules s
+        JOIN journalists j ON s.journalist_id = j.id
+        ORDER BY s.journalist_id, s.command, s.time_kst
+        """,
+    )
+    rows = await cursor.fetchall()
+    return [
+        {
+            "journalist_id": r["journalist_id"],
+            "command": r["command"],
+            "time_kst": r["time_kst"],
+            "telegram_id": r["telegram_id"],
+        }
+        for r in rows
+    ]
+
+
+async def delete_all_schedules(
+    db: aiosqlite.Connection,
+    journalist_id: int,
+) -> None:
+    """사용자의 전체 스케줄을 삭제한다."""
+    await db.execute("DELETE FROM schedules WHERE journalist_id = ?", (journalist_id,))
+    await db.commit()
 
 
 # --- 캐시 정리 ---

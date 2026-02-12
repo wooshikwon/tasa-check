@@ -80,24 +80,30 @@ async def fetch_article_body(url: str) -> str | None:
         return None
 
 
+_MAX_CONCURRENT = 20
+
+
 async def fetch_articles_batch(urls: list[str]) -> dict[str, str | None]:
     """여러 URL의 기사 본문을 병렬로 가져온다.
 
     httpx.AsyncClient를 공유하여 연결을 재사용하고,
-    asyncio.gather로 동시 요청한다.
+    세마포어로 동시 요청 수를 제한한다.
     """
     if not urls:
         return {}
 
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
+
     async def _fetch_one(client: httpx.AsyncClient, url: str) -> tuple[str, str | None]:
-        try:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            body = _parse_article_body(resp.text)
-        except Exception:
-            logger.warning("기사 본문 추출 실패: %s", url, exc_info=True)
-            body = None
-        return url, body
+        async with semaphore:
+            try:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                body = _parse_article_body(resp.text)
+            except Exception:
+                logger.warning("기사 본문 추출 실패: %s", url, exc_info=True)
+                body = None
+            return url, body
 
     async with httpx.AsyncClient(
         timeout=_TIMEOUT, headers=_HEADERS, follow_redirects=True
@@ -105,4 +111,5 @@ async def fetch_articles_batch(urls: list[str]) -> dict[str, str | None]:
         tasks = [_fetch_one(client, url) for url in urls]
         results = await asyncio.gather(*tasks)
 
+    logger.info("본문 스크래핑 완료: %d건 중 %d건 성공", len(urls), sum(1 for _, b in results if b))
     return dict(results)

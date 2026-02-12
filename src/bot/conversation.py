@@ -17,6 +17,7 @@ from telegram.ext import (
 
 from src.config import DEPARTMENTS
 from src.storage import repository as repo
+from src.bot.scheduler import unregister_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -94,15 +95,24 @@ async def receive_api_key(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         keywords=ud["keywords"],
         api_key=api_key,
     )
-    # 기존 report/check 데이터 초기화
+    # 기존 report/check/schedule 데이터 초기화
     await repo.clear_journalist_data(db, journalist_id)
+    unregister_jobs(context.application, journalist_id)
 
     keywords_str = ", ".join(ud["keywords"])
     await update.effective_chat.send_message(
         f"설정 완료!\n"
         f"부서: {ud['department']}\n"
         f"키워드: {keywords_str}\n"
-        f"/check - 타사 체크 | /report - 부서 주요 뉴스"
+        f"\n"
+        f"사용 가능한 명령어:\n"
+        f"/check - 키워드 기반 타사 체크\n"
+        f"/report - 부서 주요 뉴스 브리핑\n"
+        f"/schedule - 자동 실행 예약\n"
+        f"  (예: /schedule check 09:00 12:00)\n"
+        f"/schedule off - 자동 실행 예약 일괄 삭제\n"
+        f"/setkey - Claude API 키 변경\n"
+        f"/setdivision - 부서 변경"
     )
     context.user_data.clear()
     return ConversationHandler.END

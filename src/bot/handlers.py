@@ -1,13 +1,13 @@
-"""/check, /report, /setkey 명령 핸들러."""
+"""/check, /report, /setkey, /setdivision 명령 핸들러."""
 
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from src.config import CHECK_MAX_WINDOW_SECONDS
+from src.config import CHECK_MAX_WINDOW_SECONDS, DEPARTMENTS
 from src.tools.search import search_news
 from src.tools.scraper import fetch_articles_batch
 from src.filters.publisher import filter_by_publisher, get_publisher_name
@@ -221,40 +221,40 @@ async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         if is_scenario_a:
             await _handle_report_scenario_a(
-                update, db, cache_id, department, today, results,
+                update.message.reply_text, db, cache_id, department, today, results,
             )
         else:
             await _handle_report_scenario_b(
-                update, db, cache_id, department, today,
+                update.message.reply_text, db, cache_id, department, today,
                 existing_items, results,
             )
 
 
 async def _handle_report_scenario_a(
-    update, db, cache_id, department, today, results,
+    send_fn, db, cache_id, department, today, results,
 ) -> None:
     """시나리오 A: 당일 첫 요청. 전체 브리핑 생성."""
     if results:
         await repo.save_report_items(db, cache_id, results)
 
     if not results:
-        await update.message.reply_text("관련 뉴스를 찾지 못했습니다.")
+        await send_fn("관련 뉴스를 찾지 못했습니다.")
         return
 
     # 후속 항목을 앞에 정렬
     sorted_results = sorted(results, key=lambda r: r.get("category") != "follow_up")
 
-    await update.message.reply_text(
+    await send_fn(
         format_report_header_a(department, today, len(sorted_results)),
         parse_mode="HTML",
     )
     for item in sorted_results:
         msg = format_report_item(item)
-        await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
+        await send_fn(msg, parse_mode="HTML", disable_web_page_preview=True)
 
 
 async def _handle_report_scenario_b(
-    update, db, cache_id, department, today,
+    send_fn, db, cache_id, department, today,
     existing_items, delta_results,
 ) -> None:
     """시나리오 B: 당일 재요청. 기존 항목 + 변경분을 합쳐 전체 브리핑 출력."""
@@ -299,7 +299,7 @@ async def _handle_report_scenario_b(
     added_count = len(added)
 
     # 헤더 전송
-    await update.message.reply_text(
+    await send_fn(
         format_report_header_b(department, today, len(merged_items), modified_count, added_count),
         parse_mode="HTML",
     )
@@ -309,7 +309,7 @@ async def _handle_report_scenario_b(
     sorted_items = sorted(merged_items, key=lambda r: action_order.get(r.get("action", ""), 2))
     for item in sorted_items:
         msg = format_report_item(item, scenario_b=True)
-        await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
+        await send_fn(msg, parse_mode="HTML", disable_web_page_preview=True)
 
 
 async def setkey_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -343,3 +343,57 @@ async def setkey_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "사용법: /setkey sk-ant-your-new-key\n"
             "(입력 후 메시지가 자동 삭제됩니다)"
         )
+
+
+async def setdivision_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/setdivision 명령 처리. 부서 변경 InlineKeyboard 표시."""
+    db = context.bot_data["db"]
+    telegram_id = str(update.effective_user.id)
+
+    journalist = await repo.get_journalist(db, telegram_id)
+    if not journalist:
+        await update.message.reply_text("프로필이 없습니다. /start로 등록해주세요.")
+        return
+
+    keyboard = [
+        DEPARTMENTS[i:i+2] for i in range(0, len(DEPARTMENTS), 2)
+    ]
+    keyboard = [
+        [InlineKeyboardButton(dept, callback_data=f"setdiv:{dept}") for dept in row]
+        for row in keyboard
+    ]
+    await update.message.reply_text(
+        f"현재 부서: {journalist['department']}\n변경할 부서를 선택해주세요.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def setdivision_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """부서 변경 InlineKeyboard 콜백 처리."""
+    from src.bot.scheduler import unregister_jobs
+
+    query = update.callback_query
+    await query.answer()
+
+    new_dept = query.data.removeprefix("setdiv:")
+    db = context.bot_data["db"]
+    telegram_id = str(update.effective_user.id)
+
+    journalist = await repo.get_journalist(db, telegram_id)
+    if not journalist:
+        await query.edit_message_text("프로필이 없습니다. /start로 등록해주세요.")
+        return
+
+    if journalist["department"] == new_dept:
+        await query.edit_message_text(f"이미 {new_dept} 소속입니다.")
+        return
+
+    # 부서 변경 + 이전 맥락 삭제
+    await repo.update_department(db, telegram_id, new_dept)
+    await repo.clear_journalist_data(db, journalist["id"])
+    unregister_jobs(context.application, journalist["id"])
+
+    await query.edit_message_text(
+        f"부서가 {new_dept}(으)로 변경되었습니다.\n"
+        f"이전 체크/브리핑/스케줄 이력이 초기화되었습니다."
+    )

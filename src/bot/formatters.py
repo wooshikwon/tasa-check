@@ -81,7 +81,8 @@ def format_skipped_articles(skipped: list[dict]) -> str:
             seen_clusters.add(cluster)
         deduped.append(article)
 
-    lines = [f"<b>스킵 {len(deduped)}건</b>"]
+    header = f"<b>스킵 {len(deduped)}건</b>"
+    item_lines = []
     for article in deduped:
         title = html_module.escape(article.get("title", "")).strip()
         reason = html_module.escape(article.get("reason", "")).strip()
@@ -89,10 +90,11 @@ def format_skipped_articles(skipped: list[dict]) -> str:
         url = urls[0] if urls else ""
         title_part = f'<a href="{html_module.escape(url)}">{title or "(제목 없음)"}</a>' if url else (title or "(제목 없음)")
         if reason:
-            lines.append(f"- {title_part} → {reason}")
+            item_lines.append(f"- {title_part} → {reason}")
         else:
-            lines.append(f"- {title_part}")
-    return _truncate("\n".join(lines))
+            item_lines.append(f"- {title_part}")
+    body = "\n".join(item_lines)
+    return _truncate(f"{header}\n<blockquote expandable>{body}</blockquote>")
 
 
 # --- /report 포맷 ---
