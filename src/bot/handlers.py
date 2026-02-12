@@ -17,7 +17,7 @@ from src.bot.formatters import (
     format_check_header, format_article_message, format_no_results,
     format_no_important, format_skipped_articles,
     format_report_header_a, format_report_header_b,
-    format_report_item, format_report_references,
+    format_report_item,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,13 +41,20 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
     # 네이버 뉴스 수집
     raw_articles = await search_news(journalist["keywords"], since)
     if not raw_articles:
-        await repo.update_last_check_at(db, journalist["id"])
         return None, since, now
 
     # 언론사 필터링
     filtered = filter_by_publisher(raw_articles)
     if not filtered:
-        await repo.update_last_check_at(db, journalist["id"])
+        return None, since, now
+
+    # 제목 기반 필터링 (분석 가치 없는 기사 제거)
+    _SKIP_TITLE_TAGS = {"[포토]", "[사진]", "[영상]", "[동영상]", "[화보]", "[카드뉴스]", "[인포그래픽]"}
+    filtered = [
+        a for a in filtered
+        if not any(tag in a.get("title", "") for tag in _SKIP_TITLE_TAGS)
+    ]
+    if not filtered:
         return None, since, now
 
     # 본문 수집 (첫 1~2문단)
@@ -68,20 +75,34 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
             "pubDate": pub_date_str,
         })
 
-    # 맥락 + 이력 로드
-    report_context = await repo.get_today_report_items(db, journalist["id"])
+    # 이전 check 보고 이력 로드
     history = await repo.get_recent_reported_articles(db, journalist["id"], hours=24)
 
     # Claude API 분석
     results = await analyze_articles(
         api_key=journalist["api_key"],
         articles=articles_for_analysis,
-        report_context=report_context,
         history=history,
         department=journalist["department"],
         keywords=journalist["keywords"],
     )
-    await repo.update_last_check_at(db, journalist["id"])
+
+    # Claude는 기사 번호(index)만 반환 → 원본 데이터에서 URL, 언론사를 주입
+    if results:
+        n = len(articles_for_analysis)
+        for r in results:
+            sources = r.pop("source_indices", [])
+            merged = r.pop("merged_indices", [])
+            valid_sources = [i for i in sources if 1 <= i <= n]
+            valid_merged = [i for i in merged if 1 <= i <= n]
+
+            r["article_urls"] = [articles_for_analysis[i - 1]["url"] for i in valid_sources]
+            r["merged_from"] = [articles_for_analysis[i - 1]["url"] for i in valid_merged]
+            if valid_sources:
+                r["publisher"] = articles_for_analysis[valid_sources[0] - 1]["publisher"]
+            elif not r.get("publisher"):
+                r["publisher"] = ""
+
     return results, since, now
 
 
@@ -113,9 +134,10 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     reported = [r for r in results if r["category"] != "skip"]
     skipped = [r for r in results if r["category"] == "skip"]
 
-    # DB에 보고 이력 저장
+    # DB에 보고 이력 저장 + 윈도우 갱신 (보고 대상이 있을 때만)
     if reported:
         await repo.save_reported_articles(db, journalist["id"], reported)
+        await repo.update_last_check_at(db, journalist["id"])
 
     if not reported:
         await update.message.reply_text(format_no_important())
@@ -187,49 +209,43 @@ async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(f"브리핑 생성 중 오류가 발생했습니다: {e}")
         return
 
-    main_results = [r for r in results if r.get("importance", "main") == "main"]
-    references = [r for r in results if r.get("importance") == "reference"]
-
     if is_scenario_a:
         await _handle_report_scenario_a(
-            update, db, cache_id, department, today, main_results, references,
+            update, db, cache_id, department, today, results,
         )
     else:
         await _handle_report_scenario_b(
             update, db, cache_id, department, today,
-            existing_items, main_results, references,
+            existing_items, results,
         )
 
 
 async def _handle_report_scenario_a(
-    update, db, cache_id, department, today,
-    main_results, references,
+    update, db, cache_id, department, today, results,
 ) -> None:
     """시나리오 A: 당일 첫 요청. 전체 브리핑 생성."""
-    if main_results:
-        await repo.save_report_items(db, cache_id, main_results)
+    if results:
+        await repo.save_report_items(db, cache_id, results)
 
-    if not main_results and not references:
+    if not results:
         await update.message.reply_text("관련 뉴스를 찾지 못했습니다.")
         return
 
+    # 후속 항목을 앞에 정렬
+    sorted_results = sorted(results, key=lambda r: r.get("category") != "follow_up")
+
     await update.message.reply_text(
-        format_report_header_a(department, today, len(main_results)),
+        format_report_header_a(department, today, len(sorted_results)),
         parse_mode="HTML",
     )
-    for item in main_results:
+    for item in sorted_results:
         msg = format_report_item(item)
         await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
-
-    if references:
-        await update.message.reply_text(
-            format_report_references(references), parse_mode="HTML", disable_web_page_preview=True,
-        )
 
 
 async def _handle_report_scenario_b(
     update, db, cache_id, department, today,
-    existing_items, delta_results, references,
+    existing_items, delta_results,
 ) -> None:
     """시나리오 B: 당일 재요청. 기존 항목 + 변경분을 합쳐 전체 브리핑 출력."""
     # action 필드 보정
@@ -284,15 +300,11 @@ async def _handle_report_scenario_b(
             parse_mode="HTML",
         )
 
-    # 전체 항목 출력
-    for item in merged_items:
+    # 후속 항목을 앞에 정렬 후 출력
+    sorted_items = sorted(merged_items, key=lambda r: r.get("category") != "follow_up")
+    for item in sorted_items:
         msg = format_report_item(item, scenario_b=True)
         await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
-
-    if references:
-        await update.message.reply_text(
-            format_report_references(references), parse_mode="HTML", disable_web_page_preview=True,
-        )
 
 
 async def setkey_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

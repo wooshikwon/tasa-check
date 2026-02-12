@@ -23,7 +23,7 @@ TOOLS = [
     {
         "type": "web_search_20250305",
         "name": "web_search",
-        "max_uses": 10,
+        "max_uses": 15,
     },
     {
         "name": "fetch_article",
@@ -41,17 +41,15 @@ _OUTPUT_SCHEMA_A = """\
   {
     "title": "기사 제목",
     "url": "기사 URL",
-    "summary": "1~2문장 핵심 요약",
+    "summary": "2~3줄 구체적 요약 (인물명, 수치, 일시 등 팩트 포함)",
     "tags": ["태그1", "태그2"],
     "category": "follow_up" 또는 "new",
     "exclusive": true 또는 false,
-    "prev_reference": "YYYY-MM-DD \\"이전 제목\\"" (follow_up만, new는 null),
-    "importance": "main" 또는 "reference"
+    "prev_reference": "YYYY-MM-DD \\"이전 제목\\"" (follow_up만, new는 null)
   }
 ]
 - exclusive: 제목에 [단독] 태그가 있거나 특정 언론사만 보도한 기사이면 true
-- importance "main": 중요도 기준에 해당하는 주요 기사 (5~8개)
-- importance "reference": 주요 기준에는 미달하지만 참고할 만한 기사 (3~5개, 제목만 전달)"""
+- 최소 8개, 10개 이상 목표. 부족하면 추가 검색을 반드시 실행한다."""
 
 _OUTPUT_SCHEMA_B = """\
 [
@@ -60,17 +58,14 @@ _OUTPUT_SCHEMA_B = """\
     "item_id": 기존 항목 ID (modified만, added는 null),
     "title": "기사 제목",
     "url": "기사 URL",
-    "summary": "갱신된 요약 또는 신규 요약",
+    "summary": "2~3줄 구체적 요약 (갱신 또는 신규)",
     "tags": ["태그1", "태그2"],
     "category": "follow_up" 또는 "new",
     "exclusive": true 또는 false,
-    "prev_reference": null,
-    "importance": "main" 또는 "reference"
+    "prev_reference": null
   }
 ]
 - exclusive: 제목에 [단독] 태그가 있거나 특정 언론사만 보도한 기사이면 true
-- importance "main": 주요 기사 (수정/추가 대상)
-- importance "reference": 참고 기사 (제목만 전달)
 변경 없는 기존 항목은 포함하지 않는다. 수정/추가 항목이 없으면 빈 배열 []을 반환."""
 
 
@@ -102,16 +97,23 @@ def _build_system_prompt(
         f"오늘은 {date} ({date_kr})이다. 이 날짜는 현재 시점의 실제 날짜이며, "
         "미래가 아니다. 날짜에 대한 의심 없이 당일 뉴스를 검색하라.",
 
-        f"[검색 범위]\n"
-        f"- 당일({date_kr}) 한국 뉴스만 대상\n"
-        f"- 전일 이전 기사는 포함하지 않음\n"
-        f"- 검색 쿼리에 날짜를 포함하여 당일 기사를 정확히 타겟하라",
+        f"[검색 범위 - 엄격 적용]\n"
+        f"- 반드시 {date} ({date_kr}) 당일 보도된 기사만 포함\n"
+        f"- 기사의 발행일이 {date}이 아니면 절대 포함하지 않는다\n"
+        f"- 11일, 10일, 9일 등 이전 날짜 기사는 내용과 무관하게 제외\n"
+        f"- 검색 쿼리에 '{date_kr}'를 반드시 포함하여 당일 기사를 타겟하라",
     ]
 
     # 이전 태그
     if recent_tags:
         tags_str = " ".join(f"#{t}" for t in recent_tags)
         sections.append(f"[이전 전달 태그 - 최근 3일]\n{tags_str}")
+    else:
+        sections.append(
+            "[이전 전달 태그 - 최근 3일]\n"
+            "없음. 이전 전달 이력이 없으므로 모든 항목을 category: \"new\", "
+            "prev_reference: null로 설정하라."
+        )
 
     # 시나리오 B: 기존 캐시
     if is_scenario_b:
@@ -127,13 +129,15 @@ def _build_system_prompt(
     if is_scenario_b:
         sections.append(
             "[절차 - 당일 재요청]\n"
-            "1. 기존 캐시 항목의 후속 정보가 있는지 검색\n"
-            "2. 부서별 신규 뉴스 검색\n"
-            "3. 기존 항목에 새 정보가 있으면 [수정] (기존 요약에 새 정보 병합)\n"
+            "첫 요청과 동일한 수준으로 폭넓게 검색한 뒤, 기존 캐시와 비교한다.\n"
+            "1. 부서 관련 당일 뉴스를 폭넓게 검색 (첫 요청과 동일 범위)\n"
+            "2. 검색 결과를 기존 캐시와 대조\n"
+            "3. 기존 항목에 새 팩트가 추가됐으면 [수정] (기존 요약에 새 정보 병합)\n"
             "4. 기존 캐시에 없는 새로운 기사는 [추가]\n"
             "5. 변경 없는 항목은 출력하지 않음\n"
-            "6. 참고할 만한 기사(importance: reference) 3~5개 추가 선정\n"
-            "7. 검색과 분석이 끝나면 아래 JSON 형식으로 최종 응답"
+            "6. 추가 항목은 적극적으로 찾는다. 기존 캐시가 부족했을 수 있다\n"
+            "7. 각 항목마다 2~3줄의 구체적 요약 작성\n"
+            "8. 검색과 분석이 끝나면 아래 JSON 형식으로 최종 응답"
         )
     else:
         sections.append(
@@ -142,8 +146,8 @@ def _build_system_prompt(
             "2. 검색 쿼리에 오늘 날짜를 명시\n"
             "3. 후속/심화: 이전 캐시 항목과 내용상 연결되는 보도\n"
             "4. 신규: 연결 없는 새로운 뉴스\n"
-            "5. 주요 기사(importance: main) 5~8개 선정\n"
-            "6. 주요 기준에 미달하지만 참고할 만한 기사(importance: reference) 3~5개 추가 선정\n"
+            "5. 최소 8개, 10개 이상 목표. 부족하면 추가 검색 실행\n"
+            "6. 각 항목마다 2~3줄의 구체적 요약 작성\n"
             "7. 검색과 분석이 끝나면 아래 JSON 형식으로 최종 응답"
         )
 
@@ -155,19 +159,30 @@ def _build_system_prompt(
     if coverage:
         sections.append(f"[취재 영역 - {dept_label}]\n{coverage}")
 
-    criteria_lines = [f"[중요 기사 판단 기준 - {dept_label}]"]
-    criteria_lines.append(f"{dept_label} 소속 기자가 반드시 알아야 할 기사만 포함한다:")
+    criteria_lines = [f"[선정 기준 - {dept_label}]"]
+    criteria_lines.append(
+        f"{dept_label} 데스크가 주목할 사안만 선정한다. "
+        "사회적 파장, 후속 보도 가능성, 복수 언론 보도 여부를 기준으로 판단:"
+    )
     for c in criteria:
         criteria_lines.append(f"- {c}")
-    criteria_lines.append("단순 일정 안내, 보도자료 요약, 사소한 사안은 제외한다.")
+    criteria_lines.append(
+        "\n[제외 기준]\n"
+        "아래에 해당하는 기사는 포함하지 않는다:\n"
+        "- 단발성 사건·사고: 후속 보도 가능성이 낮은 개별 사망, 교통사고, 화재 등\n"
+        "- 정례적 발표: 정부 부처 보도자료, 정기 통계, 일상적 권고·캠페인\n"
+        "- 단순 일정 안내: 행사 예고, 연휴 대비 당부 등\n"
+        "- 사회적 관심도가 낮은 사안: 소규모 지역 이슈, 단일 기관 내부 사안"
+    )
     sections.append("\n".join(criteria_lines))
 
     # 요약 작성 기준
     sections.append(
         "[요약 작성 기준]\n"
-        "- 1~2문장으로 핵심만 전달. 길게 쓰지 않는다\n"
-        "- 구체적 정보: \"수사가 확대됐다\" 대신 \"임원 3명을 추가 소환했다\"\n"
-        "- 사실 기반, 추측/의견 배제\n"
+        "- 2~3줄로 핵심 정보를 구체적으로 전달\n"
+        "- 인물명, 기관명, 수치, 일시 등 구체적 팩트를 반드시 포함\n"
+        "- 사안의 배경과 의미를 짚는다\n"
+        "- 사실 기반 작성, 추측/의견 배제\n"
         "- 검색 결과 스니펫만으로 부족하면 fetch_article로 원문 확인"
     )
 
@@ -206,8 +221,8 @@ def _build_user_prompt(department: str, date_kr: str, is_scenario_b: bool) -> st
 def _parse_response(text: str) -> list[dict]:
     """Claude 최종 응답에서 JSON 배열을 파싱한다.
 
-    Claude가 JSON 외 텍스트를 함께 반환할 수 있으므로,
-    텍스트에서 JSON 배열 부분을 찾아 파싱한다.
+    여러 text 블록이 결합되면 내러티브 텍스트에 [, ] 등이 포함될 수 있으므로,
+    가능한 모든 [ 위치에서 파싱을 시도한다.
     """
     text = text.strip()
     # 코드블록 마크다운 제거
@@ -222,24 +237,45 @@ def _parse_response(text: str) -> list[dict]:
     except json.JSONDecodeError:
         pass
 
-    # JSON 배열 패턴([...])을 텍스트에서 추출
-    start = text.find("[")
-    if start == -1:
-        logger.error("JSON 배열을 찾을 수 없음: %s", text[:200])
-        return []
-
-    # 마지막 ]를 찾아 JSON 영역 추출
     end = text.rfind("]")
-    if end == -1 or end <= start:
+    if end == -1:
         logger.error("JSON 배열 닫힘을 찾을 수 없음: %s", text[:200])
         return []
 
-    json_str = text[start:end + 1]
-    try:
-        return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        logger.error("JSON 파싱 실패: %s, 텍스트: %s", e, json_str[:200])
-        return []
+    # 마지막 ]부터 역방향으로 매칭되는 [를 찾아 파싱 시도
+    # 내러티브 텍스트의 [단독], [검색] 등을 건너뛰기 위함
+    pos = -1
+    while True:
+        pos = text.find("[", pos + 1)
+        if pos == -1 or pos >= end:
+            break
+        json_str = text[pos:end + 1]
+        try:
+            result = json.loads(json_str)
+            if isinstance(result, list):
+                return result
+        except json.JSONDecodeError:
+            continue
+
+    # 모든 [ 위치에서 실패 → 마지막 완전한 객체까지 잘라서 복구 시도
+    last_brace = text.rfind("}")
+    if last_brace > 0:
+        pos = -1
+        while True:
+            pos = text.find("[", pos + 1)
+            if pos == -1 or pos >= last_brace:
+                break
+            truncated = text[pos:last_brace + 1] + "]"
+            try:
+                result = json.loads(truncated)
+                if isinstance(result, list):
+                    logger.warning("잘린 JSON 복구: 원본 %d자 → %d자", len(text), len(truncated))
+                    return result
+            except json.JSONDecodeError:
+                continue
+
+    logger.error("JSON 파싱 실패: %s", text[:300])
+    return []
 
 
 async def _execute_custom_tools(response) -> list[dict]:
@@ -302,7 +338,7 @@ async def run_report_agent(
 
             response = await client.messages.create(
                 model="claude-sonnet-4-5-20250929",
-                max_tokens=4096,
+                max_tokens=8192,
                 system=system_prompt,
                 tools=TOOLS,
                 messages=messages,

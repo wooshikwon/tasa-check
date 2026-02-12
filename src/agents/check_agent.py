@@ -58,33 +58,25 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 {{
   "category": "exclusive" | "important" | "skip",
   "topic_cluster": "주제 식별자 (짧은 구문)",
-  "publisher": "언론사명",
+  "source_indices": [대표 기사 번호],
+  "merged_indices": [병합된 다른 기사 번호] 또는 빈 배열,
   "title": "기사 제목 (skip 포함 모든 항목에 반드시 기재)",
   "summary": "2~3문장 요약 (skip이면 빈 문자열)",
   "reason": "주요 판단 근거 1문장 (skip이면 스킵 사유)",
-  "key_facts": ["핵심 팩트1", "핵심 팩트2"],
-  "article_urls": ["원본 URL (skip 포함 반드시 기재)"],
-  "merged_from": ["병합된 다른 기사 URL"] 또는 빈 배열
+  "key_facts": ["핵심 팩트1", "핵심 팩트2"]
 }}
+source_indices: 해당 항목의 대표 기사 번호 (위 [새로 수집된 기사] 목록의 번호)
+merged_indices: 동일 사안으로 병합된 다른 기사들의 번호 (없으면 빈 배열)
 """
 
 
 def _build_user_prompt(
     articles: list[dict],
-    report_context: list[dict],
     history: list[dict],
     department: str,
 ) -> str:
     """사용자 프롬프트를 조립한다."""
     sections = []
-
-    # 사회적 맥락 (report_items가 있을 때만)
-    if report_context:
-        lines = [f"[당일 사회적 맥락 - {department}부]"]
-        for i, item in enumerate(report_context, 1):
-            tags = " ".join(f"#{t}" for t in item.get("tags", []))
-            lines.append(f"({i}) {item['title']} {tags}")
-        sections.append("\n".join(lines))
 
     # 보고 이력
     if history:
@@ -98,18 +90,16 @@ def _build_user_prompt(
     else:
         sections.append("[기자의 최근 보고 이력]\n이력 없음")
 
-    # 새로 수집된 기사
+    # 새로 수집된 기사 (번호로 참조, URL은 코드에서 관리)
     lines = ["[새로 수집된 기사]"]
     for i, a in enumerate(articles, 1):
         publisher = a.get("publisher", "")
         title = a.get("title", "")
         body = a.get("body", "")
-        url = a.get("url", "")
         pub_date = a.get("pubDate", "")
         lines.append(f"{i}. [{publisher}] {title}")
         if body:
             lines.append(f"   본문(1~2문단): {body}")
-        lines.append(f"   URL: {url}")
         lines.append(f"   시각: {pub_date}")
     sections.append("\n".join(lines))
 
@@ -127,7 +117,7 @@ def _build_user_prompt(
 def _parse_response(text: str) -> list[dict]:
     """Claude 응답에서 JSON 배열을 파싱한다.
 
-    max_tokens로 잘린 경우 불완전한 JSON을 복구 시도한다.
+    max_tokens로 잘린 경우 } 위치를 역순 탐색하여 마지막 완전한 객체까지 복구한다.
     """
     text = text.strip()
     if "```" in text:
@@ -135,7 +125,7 @@ def _parse_response(text: str) -> list[dict]:
         lines = [l for l in lines if not l.startswith("```")]
         text = "\n".join(lines).strip()
 
-    # JSON 배열 영역 추출
+    # JSON 배열 시작 위치
     start = text.find("[")
     if start == -1:
         logger.error("JSON 배열을 찾을 수 없음: %s", text[:200])
@@ -147,16 +137,23 @@ def _parse_response(text: str) -> list[dict]:
     except json.JSONDecodeError:
         pass
 
-    # 잘린 JSON 복구: 마지막 완전한 객체(})까지만 사용
-    last_brace = text.rfind("}")
-    if last_brace > 0:
-        truncated = text[:last_brace + 1] + "]"
+    # 잘린 JSON 복구: } 위치를 오른쪽부터 역순으로 시도
+    search_end = len(text)
+    while search_end > 0:
+        pos = text.rfind("}", 0, search_end)
+        if pos == -1:
+            break
+        truncated = text[:pos + 1] + "]"
         try:
-            return json.loads(truncated)
+            result = json.loads(truncated)
+            if isinstance(result, list):
+                logger.warning("잘린 JSON 복구: 원본 %d자 → %d자, %d건 복구", len(text), len(truncated), len(result))
+                return result
         except json.JSONDecodeError:
-            pass
+            search_end = pos
+            continue
 
-    logger.error("JSON 파싱 실패: %s", text[:200])
+    logger.error("JSON 파싱 실패: %s", text[:300])
     return []
 
 
@@ -184,7 +181,6 @@ def _build_system_prompt(keywords: list[str], department: str) -> str:
 async def analyze_articles(
     api_key: str,
     articles: list[dict],
-    report_context: list[dict],
     history: list[dict],
     department: str,
     keywords: list[str] | None = None,
@@ -194,17 +190,16 @@ async def analyze_articles(
     Args:
         api_key: 기자의 Anthropic API 키
         articles: 수집된 기사 목록 (title, publisher, body, url, pubDate)
-        report_context: 당일 report_items (optional 맥락)
         history: 최근 24시간 보고 이력
         department: 기자 부서
         keywords: 기자의 취재 키워드 목록
 
     Returns:
-        분석 결과 리스트. 각 항목은 category, topic_cluster, publisher,
-        title, summary, reason, key_facts, article_urls, merged_from 포함.
+        분석 결과 리스트. 각 항목은 category, topic_cluster, source_indices,
+        merged_indices, title, summary, reason, key_facts 포함.
     """
     system_prompt = _build_system_prompt(keywords or [], department)
-    user_prompt = _build_user_prompt(articles, report_context, history, department)
+    user_prompt = _build_user_prompt(articles, history, department)
 
     langfuse = get_langfuse()
     with langfuse.start_as_current_observation(
@@ -213,7 +208,7 @@ async def analyze_articles(
         client = anthropic.AsyncAnthropic(api_key=api_key)
         message = await client.messages.create(
             model="claude-sonnet-4-5-20250929",
-            max_tokens=8192,
+            max_tokens=16384,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )

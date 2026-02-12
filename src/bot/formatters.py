@@ -130,25 +130,26 @@ def format_report_item(item: dict, scenario_b: bool = False) -> str:
 
     # 태그 결정
     is_exclusive = item.get("exclusive", False)
+    tags = []
+    if is_exclusive:
+        tags.append("[단독]")
     if scenario_b:
         if action == "modified":
-            tag = "[수정]"
+            tags.append("[수정]")
         elif action == "added":
-            tag = "[추가]"
-        else:
-            tag = "[후속]" if category == "follow_up" else "[신규]"
-    else:
-        tag = "[후속]" if category == "follow_up" else "[신규]"
-    if is_exclusive:
-        tag = f"[단독] {tag}"
+            tags.append("[추가]")
+    if category == "follow_up":
+        tags.append("[후속]")
+    tag = " ".join(tags)
 
     title = html_module.escape(item.get("title", ""))
     summary = html_module.escape(item.get("summary", ""))
     url = item.get("url", "")
     prev_ref = item.get("prev_reference")
 
+    header = f"{tag} {title}".strip() if tag else title
     lines = [
-        f"<b>{tag} {title}</b>",
+        f"<b>{header}</b>",
         "",
         summary,
     ]
