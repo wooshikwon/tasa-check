@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 AWAIT_KEYWORD, AWAIT_APIKEY, AWAIT_SCHEDULE = range(3)
 
 _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
-_MAX_TIMES = {"check": 60, "report": 3}
+_MAX_TIMES = {"check": 30, "report": 30}
 
 
 # --- /set_keyword ---
@@ -145,8 +145,8 @@ async def schedule_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"  report: {', '.join(report_times) if report_times else '(없음)'}",
         "",
         "변경하려면 아래 형식으로 입력해주세요.",
-        "  check 09:00 12:00 15:00",
-        "  report 08:30",
+        "  check 09:00 12:00 15:00 (최대 30건)",
+        "  report 08:30 12:30 14:30 (최대 30건)",
         "  off — 전체 해제",
         "",
         "/cancel — 취소",
