@@ -1,5 +1,5 @@
 {
-  "description": "주요 언론사 화이트리스트 (27개)",
+  "description": "주요 언론사 화이트리스트 (28개)",
   "publishers": [
     {
       "name": "조선일보",
@@ -134,6 +134,11 @@
     {
       "name": "이데일리",
       "domain": "edaily.co.kr",
+      "category": "경제지"
+    },
+    {
+      "name": "AI타임스",
+      "domain": "aitimes.com",
       "category": "경제지"
     }
   ]
