@@ -55,6 +55,8 @@ def format_article_message(article: dict) -> str:
     if pub_time:
         title_line += f" ({pub_time})"
 
+    if url:
+        title_line = f'<a href="{html_module.escape(url)}">{title_line}</a>'
     lines = [
         f"<b>{title_line}</b>",
         "",
@@ -63,9 +65,6 @@ def format_article_message(article: dict) -> str:
     if reason:
         lines.append("")
         lines.append(f"-> <i>{reason}</i>")
-    if url:
-        lines.append("")
-        lines.append(f'<a href="{html_module.escape(url)}">기사 원문</a>')
 
     msg = "\n".join(lines)
     if len(msg) > _MAX_MSG_LEN:
@@ -191,6 +190,8 @@ def format_report_item(item: dict, scenario_b: bool = False) -> str:
     header = f"{tag} {title_part}".strip() if tag else title_part
     if pub_time:
         header += f" ({pub_time})"
+    if url:
+        header = f'<a href="{html_module.escape(url)}">{header}</a>'
     lines = [
         f"<b>{header}</b>",
         "",
@@ -202,9 +203,6 @@ def format_report_item(item: dict, scenario_b: bool = False) -> str:
     if prev_ref:
         lines.append("")
         lines.append(f"<i>(이전 전달: {html_module.escape(prev_ref)})</i>")
-    if url:
-        lines.append("")
-        lines.append(f'<a href="{html_module.escape(url)}">기사 원문</a>')
 
     return _truncate("\n".join(lines))
 
