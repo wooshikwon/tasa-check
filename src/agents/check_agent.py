@@ -220,7 +220,7 @@ def _build_user_prompt(
         pub_date = a.get("pubDate", "")
         lines.append(f"{i}. [{publisher}] {title}")
         if body:
-            lines.append(f"   본문(1~2문단): {body}")
+            lines.append(f"   본문(1~3문단): {body}")
         lines.append(f"   시각: {pub_date}")
     sections.append("\n".join(lines))
 

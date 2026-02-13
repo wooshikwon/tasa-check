@@ -69,7 +69,7 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
     if not filtered:
         return None, since, now
 
-    # 본문 수집 (첫 1~2문단)
+    # 본문 수집 (첫 3문단)
     urls = [a["link"] for a in filtered]
     bodies = await fetch_articles_batch(urls)
 
@@ -162,7 +162,7 @@ async def _run_report_pipeline(
     if not filtered:
         return None
 
-    # 본문 수집 (첫 1~2문단)
+    # 본문 수집 (첫 3문단)
     urls = [a["link"] for a in filtered]
     bodies = await fetch_articles_batch(urls)
 

@@ -1,7 +1,7 @@
 """네이버 뉴스 기사 본문 스크래퍼.
 
-n.news.naver.com 기사 페이지에서 본문 첫 1~2문단을 추출한다.
-Claude 분석 시 context 절약을 위해 전체 본문이 아닌 앞부분만 가져온다.
+n.news.naver.com 기사 페이지에서 본문 첫 3문단을 추출한다.
+소제목·사진 캡션을 건너뛰고 실제 본문 문단만 가져온다.
 """
 
 import asyncio
@@ -93,7 +93,7 @@ def _parse_article_body(html: str) -> str | None:
 
 
 async def fetch_article_body(url: str) -> str | None:
-    """단일 URL에서 기사 본문 첫 1~2문단을 가져온다.
+    """단일 URL에서 기사 본문 첫 3문단을 가져온다.
 
     네트워크 오류, HTTP 오류, 파싱 실패 시 None을 반환한다.
     """
