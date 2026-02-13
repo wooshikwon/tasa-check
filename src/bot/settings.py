@@ -42,7 +42,8 @@ async def set_keyword_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await update.message.reply_text(
         f"현재 키워드: {current}\n\n"
         "변경할 키워드를 입력해주세요. (쉼표 구분)\n"
-        "예: 서부지검, 서부지법, 영등포경찰서"
+        "예: 서부지검, 서부지법, 영등포경찰서\n\n"
+        "/cancel — 취소"
     )
     return AWAIT_KEYWORD
 
@@ -92,7 +93,8 @@ async def set_apikey_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(
         f"현재 API Key: {masked}\n\n"
         "새 API 키를 입력해주세요.\n"
-        "(입력 후 메시지가 자동 삭제됩니다)"
+        "(입력 후 메시지가 자동 삭제됩니다)\n\n"
+        "/cancel — 취소"
     )
     return AWAIT_APIKEY
 
@@ -146,6 +148,8 @@ async def schedule_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "  check 09:00 12:00 15:00",
         "  report 08:30",
         "  off — 전체 해제",
+        "",
+        "/cancel — 취소",
     ]
     await update.message.reply_text("\n".join(lines))
     return AWAIT_SCHEDULE

@@ -5,6 +5,7 @@ import os
 from datetime import time, timedelta, timezone
 
 from dotenv import load_dotenv
+from telegram import BotCommand
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
 # Langfuse 자동 계측 (Anthropic API 호출을 자동 트레이싱)
@@ -55,6 +56,17 @@ async def post_init(application: Application) -> None:
     application.job_queue.run_daily(
         _daily_cleanup, time=time(hour=4, minute=0, tzinfo=_KST), name="daily_cleanup",
     )
+    # 봇 명령어 목록 등록
+    await application.bot.set_my_commands([
+        BotCommand("check", "키워드 기반 타사 체크"),
+        BotCommand("report", "부서 주요 뉴스 브리핑"),
+        BotCommand("schedule", "자동 실행 예약 설정"),
+        BotCommand("status", "현재 설정 조회"),
+        BotCommand("set_keyword", "모니터링 키워드 변경"),
+        BotCommand("set_apikey", "Claude API 키 변경"),
+        BotCommand("set_division", "부서 변경"),
+    ])
+
     logger.info("DB 초기화 완료: %s", DB_PATH)
 
 
