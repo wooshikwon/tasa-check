@@ -136,6 +136,9 @@ async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
                 await send_fn(f"[자동 브리핑] 오류: {e}")
                 return
 
+        # report 실행 완료 시점에 항상 last_report_at 갱신
+        await repo.update_last_report_at(db, journalist["id"])
+
         if results is None:
             await send_fn("관련 뉴스를 찾지 못했습니다.")
             return

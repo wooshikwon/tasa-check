@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS journalists (
     keywords TEXT NOT NULL,          -- JSON 배열
     api_key TEXT NOT NULL,           -- Fernet 암호화된 값
     last_check_at DATETIME,
+    last_report_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -72,6 +73,7 @@ async def init_db(db_path: str) -> aiosqlite.Connection:
         "ALTER TABLE report_items ADD COLUMN publisher TEXT DEFAULT ''",
         "ALTER TABLE report_items ADD COLUMN pub_time TEXT DEFAULT ''",
         "ALTER TABLE report_items ADD COLUMN key_facts TEXT DEFAULT '[]'",
+        "ALTER TABLE journalists ADD COLUMN last_report_at DATETIME",
     ]
     for sql in _migrations:
         try:

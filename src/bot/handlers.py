@@ -130,7 +130,13 @@ async def _run_report_pipeline(
         브리핑 항목 리스트. 수집 기사가 없으면 None.
     """
     now = datetime.now(UTC)
-    since = now - timedelta(seconds=REPORT_MAX_WINDOW_SECONDS)
+    last_report = journalist.get("last_report_at")
+    if last_report:
+        last_dt = datetime.fromisoformat(last_report).replace(tzinfo=UTC)
+        window_seconds = min((now - last_dt).total_seconds(), REPORT_MAX_WINDOW_SECONDS)
+    else:
+        window_seconds = REPORT_MAX_WINDOW_SECONDS
+    since = now - timedelta(seconds=window_seconds)
     department = journalist["department"]
     dept_label = department if department.endswith("부") else f"{department}부"
 
@@ -308,6 +314,9 @@ async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 logger.error("report 파이프라인 실패: %s", e, exc_info=True)
                 await update.message.reply_text(f"브리핑 생성 중 오류가 발생했습니다: {e}")
                 return
+
+        # report 실행 완료 시점에 항상 last_report_at 갱신
+        await repo.update_last_report_at(db, journalist["id"])
 
         if results is None:
             await update.message.reply_text("관련 뉴스를 찾지 못했습니다.")

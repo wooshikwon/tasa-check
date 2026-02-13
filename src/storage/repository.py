@@ -39,7 +39,8 @@ async def upsert_journalist(
             department = excluded.department,
             keywords = excluded.keywords,
             api_key = excluded.api_key,
-            last_check_at = NULL
+            last_check_at = NULL,
+            last_report_at = NULL
         """,
         (telegram_id, department, keywords_json, encrypted_key),
     )
@@ -66,6 +67,7 @@ async def get_journalist(db: aiosqlite.Connection, telegram_id: str) -> dict | N
         "keywords": json.loads(row["keywords"]),
         "api_key": decrypt_api_key(row["api_key"]),
         "last_check_at": row["last_check_at"],
+        "last_report_at": row["last_report_at"] if "last_report_at" in row.keys() else None,
         "created_at": row["created_at"],
     }
 
@@ -96,10 +98,10 @@ async def update_api_key(db: aiosqlite.Connection, telegram_id: str, api_key: st
 
 
 async def update_keywords(db: aiosqlite.Connection, telegram_id: str, keywords: list[str]) -> None:
-    """키워드를 변경하고 last_check_at을 초기화한다."""
+    """키워드를 변경하고 last_check_at/last_report_at을 초기화한다."""
     keywords_json = json.dumps(keywords, ensure_ascii=False)
     await db.execute(
-        "UPDATE journalists SET keywords = ?, last_check_at = NULL WHERE telegram_id = ?",
+        "UPDATE journalists SET keywords = ?, last_check_at = NULL, last_report_at = NULL WHERE telegram_id = ?",
         (keywords_json, telegram_id),
     )
     await db.commit()
@@ -112,9 +114,9 @@ async def clear_check_data(db: aiosqlite.Connection, journalist_id: int) -> None
 
 
 async def update_department(db: aiosqlite.Connection, telegram_id: str, department: str) -> None:
-    """부서를 변경하고 last_check_at을 초기화한다."""
+    """부서를 변경하고 last_check_at/last_report_at을 초기화한다."""
     await db.execute(
-        "UPDATE journalists SET department = ?, last_check_at = NULL WHERE telegram_id = ?",
+        "UPDATE journalists SET department = ?, last_check_at = NULL, last_report_at = NULL WHERE telegram_id = ?",
         (department, telegram_id),
     )
     await db.commit()
@@ -125,6 +127,16 @@ async def update_last_check_at(db: aiosqlite.Connection, journalist_id: int) -> 
     now = datetime.now(UTC).isoformat()
     await db.execute(
         "UPDATE journalists SET last_check_at = ? WHERE id = ?",
+        (now, journalist_id),
+    )
+    await db.commit()
+
+
+async def update_last_report_at(db: aiosqlite.Connection, journalist_id: int) -> None:
+    """마지막 /report 시각을 현재로 갱신한다."""
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        "UPDATE journalists SET last_report_at = ? WHERE id = ?",
         (now, journalist_id),
     )
     await db.commit()
