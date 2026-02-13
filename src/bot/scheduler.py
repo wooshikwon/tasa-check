@@ -55,7 +55,7 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         async with _pipeline_semaphore:
             try:
-                results, since, now = await _run_check_pipeline(db, journalist)
+                results, since, now, haiku_filtered = await _run_check_pipeline(db, journalist)
             except Exception as e:
                 logger.error("자동 check 실패 (journalist=%d): %s", journalist_id, e, exc_info=True)
                 await send_fn(f"[자동 체크] 오류: {e}")
@@ -73,8 +73,9 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         await repo.save_reported_articles(db, journalist["id"], results)
 
+        total = len(results) + haiku_filtered
         await send_fn(
-            format_check_header(len(results), len(reported), since, now),
+            format_check_header(total, len(reported), since, now),
             parse_mode="HTML",
         )
         sorted_reported = sorted(reported, key=lambda r: r.get("pub_time", ""), reverse=True)
@@ -85,7 +86,7 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
                 disable_web_page_preview=True,
             )
         if skipped:
-            for msg in format_skipped_articles(skipped):
+            for msg in format_skipped_articles(skipped, haiku_filtered):
                 await send_fn(msg, parse_mode="HTML", disable_web_page_preview=True)
 
 
