@@ -52,7 +52,7 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     async with lock:
         now_kst = datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
-        await send_fn(f"─────\nschedule 자동 실행 ({now_kst} KST)")
+        await send_fn(f"─────\nschedule 자동 실행 ({now_kst})")
 
         async with _pipeline_semaphore:
             try:
@@ -114,7 +114,7 @@ async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     async with lock:
         now_kst = datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
-        await send_fn(f"─────\nschedule 자동 실행 ({now_kst} KST)")
+        await send_fn(f"─────\nschedule 자동 실행 ({now_kst})")
 
         today = datetime.now(_KST).strftime("%Y-%m-%d")
         department = journalist["department"]
@@ -305,5 +305,5 @@ async def schedule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     times_str = ", ".join(valid_times)
     await update.message.reply_text(
         f"자동 {command} 설정 완료!\n"
-        f"매일 {times_str} (KST)에 자동 실행됩니다."
+        f"매일 {times_str}에 자동 실행됩니다."
     )

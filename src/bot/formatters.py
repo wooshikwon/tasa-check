@@ -193,3 +193,16 @@ def format_report_item(item: dict, scenario_b: bool = False) -> str:
     return _truncate("\n".join(lines))
 
 
+def format_unchanged_report_items(items: list[dict]) -> str:
+    """기보고 항목들을 제목+링크로 모아 하나의 토글 메시지로 포맷팅한다."""
+    header = f"<b>기보고 {len(items)}건</b>"
+    item_lines = []
+    for item in items:
+        title = html_module.escape(item.get("title", "")).strip()
+        url = item.get("url", "")
+        title_part = f'<a href="{html_module.escape(url)}">{title or "(제목 없음)"}</a>' if url else (title or "(제목 없음)")
+        item_lines.append(f"- {title_part}")
+    body = "\n".join(item_lines)
+    return _truncate(f"{header}\n<blockquote expandable>{body}</blockquote>")
+
+
