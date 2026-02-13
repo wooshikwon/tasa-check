@@ -291,7 +291,9 @@ async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     async with lock:
-        await update.message.reply_text("브리핑 생성 중...")
+        dept = journalist["department"]
+        dept_label = dept if dept.endswith("부") else f"{dept}부"
+        await update.message.reply_text(f"오늘 {dept_label} 브리핑 생성 중...")
 
         today = datetime.now(_KST).strftime("%Y-%m-%d")
         department = journalist["department"]
