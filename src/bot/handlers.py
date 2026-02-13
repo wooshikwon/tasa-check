@@ -197,11 +197,14 @@ async def _run_report_pipeline(
             valid_sources = [i for i in source_indices if 1 <= i <= n]
             if valid_sources:
                 src = articles_for_analysis[valid_sources[0] - 1]
-                if not r.get("url") or "naver" not in r.get("url", ""):
-                    r["url"] = src["link"]
+                r["url"] = src["link"]
                 r["publisher"] = src["publisher"]
                 pub_date = src.get("pubDate", "")
                 r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
+            else:
+                r.setdefault("url", "")
+                r.setdefault("publisher", "")
+                r.setdefault("pub_time", "")
 
     return results
 
@@ -234,6 +237,9 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 await update.message.reply_text(f"타사 체크 중 오류가 발생했습니다: {e}")
                 return
 
+        # check 실행 완료 시점에 항상 last_check_at 갱신
+        await repo.update_last_check_at(db, journalist["id"])
+
         if results is None:
             await update.message.reply_text(format_no_results())
             return
@@ -243,8 +249,6 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         skipped = [r for r in results if r["category"] == "skip"]
 
         await repo.save_reported_articles(db, journalist["id"], results)
-        if reported:
-            await repo.update_last_check_at(db, journalist["id"])
 
         total = len(results)
         important = len(reported)
@@ -365,14 +369,14 @@ async def _handle_report_scenario_b(
     for existing in existing_items:
         mod = delta_by_item_id.get(existing["id"])
         if mod:
-            # 수정된 항목: 새 요약 + reason/exclusive/tags 갱신
+            # 수정된 항목: 새 요약 + reason/exclusive/key_facts 갱신
             merged = {**existing, "summary": mod["summary"], "action": "modified"}
-            if mod.get("tags"):
-                merged["tags"] = mod["tags"]
             if mod.get("reason"):
                 merged["reason"] = mod["reason"]
             if "exclusive" in mod:
                 merged["exclusive"] = mod["exclusive"]
+            if mod.get("key_facts"):
+                merged["key_facts"] = mod["key_facts"]
             merged_items.append(merged)
             modified_ids.add(existing["id"])
         else:
@@ -391,7 +395,7 @@ async def _handle_report_scenario_b(
             db, item_id, mod["summary"],
             reason=mod.get("reason"),
             exclusive=mod.get("exclusive"),
-            tags=mod.get("tags"),
+            key_facts=mod.get("key_facts"),
         )
 
     # 변경 건수 계산

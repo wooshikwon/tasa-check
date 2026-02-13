@@ -21,9 +21,9 @@ def _clear_cache():
 
 
 class TestLoadPublishers:
-    def test_returns_23_publishers(self):
+    def test_returns_27_publishers(self):
         publishers = load_publishers()
-        assert len(publishers) == 23
+        assert len(publishers) == 27
 
     def test_publisher_has_required_fields(self):
         publishers = load_publishers()

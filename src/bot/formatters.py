@@ -32,6 +32,9 @@ def format_article_message(article: dict) -> str:
     tag = tag_map.get(category, "")
     publisher = html_module.escape(article.get("publisher", ""))
     title = html_module.escape(article.get("title", ""))
+    # 코드가 [단독] 태그를 붙이는 경우, 제목 내 중복 제거
+    if tag and title.startswith(tag):
+        title = title[len(tag):].strip()
     summary = html_module.escape(article.get("summary", ""))
     reason = html_module.escape(article.get("reason", ""))
 
@@ -158,6 +161,9 @@ def format_report_item(item: dict, scenario_b: bool = False) -> str:
 
     publisher = html_module.escape(item.get("publisher", ""))
     title = html_module.escape(item.get("title", ""))
+    # 코드가 [단독] 태그를 붙이는 경우, 제목 내 중복 제거
+    if is_exclusive and title.startswith("[단독]"):
+        title = title[len("[단독]"):].strip()
     summary = html_module.escape(item.get("summary", ""))
     reason = html_module.escape(item.get("reason", ""))
     pub_time = item.get("pub_time", "")

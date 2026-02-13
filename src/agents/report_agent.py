@@ -149,10 +149,6 @@ _REPORT_TOOL = {
                             "type": "string",
                             "description": "기사 제목",
                         },
-                        "url": {
-                            "type": "string",
-                            "description": "대표 기사 URL (수집된 기사의 originallink)",
-                        },
                         "source_indices": {
                             "type": "array",
                             "items": {"type": "integer"},
@@ -166,15 +162,15 @@ _REPORT_TOOL = {
                             "type": "string",
                             "description": "선택 사유 1문장",
                         },
-                        "tags": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "주제 태그 배열",
-                        },
                         "category": {
                             "type": "string",
                             "enum": ["follow_up", "new"],
                             "description": "follow_up=이전 보도 후속, new=신규",
+                        },
+                        "key_facts": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "이 기사의 핵심 팩트 배열 (예: [\"대표 소환\", \"회계장부 압수\"])",
                         },
                         "exclusive": {
                             "type": "boolean",
@@ -186,9 +182,9 @@ _REPORT_TOOL = {
                         },
                     },
                     "required": [
-                        "title", "url", "source_indices", "summary",
-                        "reason", "tags", "category", "exclusive",
-                        "prev_reference",
+                        "title", "source_indices", "summary",
+                        "reason", "category", "key_facts",
+                        "exclusive", "prev_reference",
                     ],
                 },
             },
@@ -277,13 +273,27 @@ def _build_system_prompt(
         "- 사실 기반 작성, 추측/의견 배제"
     )
 
+    # 중복/후속 판단 기준
+    sections.append(
+        "[중복/후속 판단 기준]\n"
+        "- new: 이전 보고 이력에 없는 새로운 사안\n"
+        "- follow_up: 이전 보고된 사안이면서, key_facts에 없는 새로운 팩트가 있을 때만\n"
+        "  예) 이전: \"A를 기소\" → 새 팩트: \"B도 추가 기소\" → follow_up\n"
+        "- 제외: 이전 key_facts와 동일한 팩트만 반복하는 기사는 선정하지 않는다\n"
+        "- 판단 원칙: 새로운 팩트를 구체적으로 특정할 수 없으면 제외\n"
+        "- follow_up 선정 시 reason에 이전 대비 추가된 새 팩트를 명시\n"
+        "- key_facts에는 이 기사의 핵심 팩트를 구체적으로 기록한다 (이후 중복 판단에 사용)"
+    )
+
     # 시나리오별 출력 규칙
     if is_scenario_b:
         lines = ["[오늘 기존 캐시]"]
         for item in existing_items:
-            tags_str = " ".join(f"#{t}" for t in item.get("tags", []))
+            facts = item.get("key_facts", [])
+            facts_str = ", ".join(facts) if facts else "없음"
             lines.append(
-                f"- id:{item['id']} | {item['title']} | 요약: {item['summary']} | {tags_str}"
+                f"- id:{item['id']} | {item['title']} | 요약: {item['summary']} "
+                f"| key_facts: [{facts_str}]"
             )
         sections.append("\n".join(lines))
 
@@ -331,10 +341,11 @@ def _build_user_prompt(
     if report_history:
         lines = ["[이전 보고 이력 - 최근 2일]"]
         for h in report_history:
-            tags_str = " ".join(f"#{t}" for t in h.get("tags", []))
+            facts = h.get("key_facts", [])
+            facts_str = ", ".join(facts) if facts else "없음"
             created = h.get("created_at", "")[:10]
             lines.append(
-                f"- \"{h['title']}\" | {h['summary']} | {tags_str} | "
+                f"- \"{h['title']}\" | {h['summary']} | key_facts: [{facts_str}] | "
                 f"{h['category']} | {created}"
             )
         sections.append("\n".join(lines))
@@ -349,9 +360,11 @@ def _build_user_prompt(
     if is_scenario_b:
         lines = ["[오늘 기존 캐시 항목]"]
         for item in existing_items:
-            tags_str = " ".join(f"#{t}" for t in item.get("tags", []))
+            facts = item.get("key_facts", [])
+            facts_str = ", ".join(facts) if facts else "없음"
             lines.append(
-                f"- id:{item['id']} | {item['title']} | 요약: {item['summary']} | {tags_str}"
+                f"- id:{item['id']} | {item['title']} | 요약: {item['summary']} "
+                f"| key_facts: [{facts_str}]"
             )
         sections.append("\n".join(lines))
 
@@ -399,7 +412,7 @@ async def analyze_report_articles(
 
     Returns:
         브리핑 항목 리스트.
-        시나리오 A: [{title, url, source_indices, summary, reason, tags, category, exclusive, prev_reference}]
+        시나리오 A: [{title, source_indices, summary, reason, category, key_facts, exclusive, prev_reference}]
         시나리오 B: [{action, item_id, ...} + 위와 동일]
     """
     system_prompt = _build_system_prompt(department, existing_items)

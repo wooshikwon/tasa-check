@@ -239,11 +239,13 @@ async def get_report_items_by_cache(
             "title": r["title"],
             "url": r["url"],
             "summary": r["summary"],
-            "tags": json.loads(r["tags"]),
             "category": r["category"],
             "prev_reference": r["prev_reference"],
             "reason": r["reason"] if "reason" in r.keys() else "",
             "exclusive": bool(r["exclusive"]) if "exclusive" in r.keys() else False,
+            "publisher": r["publisher"] if "publisher" in r.keys() else "",
+            "pub_time": r["pub_time"] if "pub_time" in r.keys() else "",
+            "key_facts": json.loads(r["key_facts"]) if "key_facts" in r.keys() else [],
         }
         for r in rows
     ]
@@ -261,8 +263,9 @@ async def save_report_items(
             """
             INSERT INTO report_items
                 (report_cache_id, title, url, summary, tags, category,
-                 prev_reference, reason, exclusive, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 prev_reference, reason, exclusive, publisher, pub_time,
+                 key_facts, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 report_cache_id,
@@ -274,6 +277,9 @@ async def save_report_items(
                 item.get("prev_reference"),
                 item.get("reason", ""),
                 int(item.get("exclusive", False)),
+                item.get("publisher", ""),
+                item.get("pub_time", ""),
+                json.dumps(item.get("key_facts", []), ensure_ascii=False),
                 now,
                 now,
             ),
@@ -287,11 +293,11 @@ async def update_report_item(
     summary: str,
     reason: str | None = None,
     exclusive: bool | None = None,
-    tags: list[str] | None = None,
+    key_facts: list[str] | None = None,
 ) -> None:
     """기존 report_item을 갱신한다. 시나리오 B [수정] 처리용.
 
-    summary는 항상 갱신. reason/exclusive/tags는 값이 전달된 경우만 갱신.
+    summary는 항상 갱신. reason/exclusive/key_facts는 값이 전달된 경우만 갱신.
     """
     now = datetime.now(UTC).isoformat()
     fields = ["summary = ?", "updated_at = ?"]
@@ -302,9 +308,9 @@ async def update_report_item(
     if exclusive is not None:
         fields.append("exclusive = ?")
         params.append(int(exclusive))
-    if tags is not None:
-        fields.append("tags = ?")
-        params.append(json.dumps(tags, ensure_ascii=False))
+    if key_facts is not None:
+        fields.append("key_facts = ?")
+        params.append(json.dumps(key_facts, ensure_ascii=False))
     params.append(item_id)
     await db.execute(
         f"UPDATE report_items SET {', '.join(fields)} WHERE id = ?",
@@ -322,7 +328,7 @@ async def get_recent_report_items(
     cutoff = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
     cursor = await db.execute(
         """
-        SELECT ri.title, ri.summary, ri.tags, ri.category, ri.created_at
+        SELECT ri.title, ri.summary, ri.category, ri.key_facts, ri.created_at
         FROM report_items ri
         JOIN report_cache rc ON ri.report_cache_id = rc.id
         WHERE rc.journalist_id = ? AND rc.date >= ?
@@ -335,8 +341,8 @@ async def get_recent_report_items(
         {
             "title": r["title"],
             "summary": r["summary"],
-            "tags": json.loads(r["tags"]),
             "category": r["category"],
+            "key_facts": json.loads(r["key_facts"]) if r["key_facts"] else [],
             "created_at": r["created_at"],
         }
         for r in rows
@@ -364,7 +370,6 @@ async def get_today_report_items(
             "title": r["title"],
             "url": r["url"],
             "summary": r["summary"],
-            "tags": json.loads(r["tags"]),
             "category": r["category"],
         }
         for r in rows
@@ -439,7 +444,7 @@ async def delete_all_schedules(
 # --- 캐시 정리 ---
 
 async def cleanup_old_data(db: aiosqlite.Connection) -> None:
-    """14일 이상 지난 report_items, reported_articles를 삭제한다."""
+    """보관 기간이 지난 report_items, reported_articles를 삭제한다."""
     cutoff = (datetime.now(UTC) - timedelta(days=CACHE_RETENTION_DAYS)).isoformat()
 
     # report_items: report_cache 기준으로 삭제

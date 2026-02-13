@@ -168,16 +168,16 @@ async def test_save_and_get_report_items(db):
             "title": "서부지검 수사 확대",
             "url": "https://example.com/1",
             "summary": "서부지검이 수사를 확대했다.",
-            "tags": ["서부지검", "수사"],
             "category": "new",
+            "key_facts": ["대표 소환", "회계장부 압수"],
         },
         {
             "title": "영등포서 사건 후속",
             "url": "https://example.com/2",
             "summary": "영등포서 후속 보도.",
-            "tags": ["영등포서"],
             "category": "follow_up",
             "prev_reference": '2026-02-10 "영등포서 사건"',
+            "key_facts": ["피의자 체포"],
         },
     ]
     await repo.save_report_items(db, cache_id, items)
@@ -185,7 +185,7 @@ async def test_save_and_get_report_items(db):
     result = await repo.get_report_items_by_cache(db, cache_id)
     assert len(result) == 2
     assert result[0]["title"] == "서부지검 수사 확대"
-    assert result[0]["tags"] == ["서부지검", "수사"]
+    assert result[0]["key_facts"] == ["대표 소환", "회계장부 압수"]
     assert result[1]["prev_reference"] == '2026-02-10 "영등포서 사건"'
 
 
@@ -199,8 +199,8 @@ async def test_update_report_item(db):
         "title": "테스트",
         "url": "https://example.com/1",
         "summary": "기존 요약",
-        "tags": ["태그"],
         "category": "new",
+        "key_facts": ["핵심 팩트"],
     }])
 
     items = await repo.get_report_items_by_cache(db, cache_id)
@@ -223,7 +223,6 @@ async def test_get_today_report_items(db):
         "title": "테스트 기사",
         "url": "https://example.com/1",
         "summary": "요약",
-        "tags": ["태그"],
         "category": "new",
     }])
 

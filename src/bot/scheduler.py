@@ -62,6 +62,9 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
                 await send_fn(f"[자동 체크] 오류: {e}")
                 return
 
+        # check 실행 완료 시점에 항상 last_check_at 갱신
+        await repo.update_last_check_at(db, journalist["id"])
+
         if results is None:
             await send_fn(format_no_results())
             return
@@ -70,8 +73,6 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
         skipped = [r for r in results if r["category"] == "skip"]
 
         await repo.save_reported_articles(db, journalist["id"], results)
-        if reported:
-            await repo.update_last_check_at(db, journalist["id"])
 
         await send_fn(
             format_check_header(len(results), len(reported), since, now),

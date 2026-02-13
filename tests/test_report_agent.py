@@ -39,7 +39,7 @@ def test_build_system_prompt_scenario_a():
 def test_build_system_prompt_scenario_b():
     """시나리오 B: 기존 캐시가 프롬프트에 포함된다."""
     existing = [
-        {"id": 1, "title": "수사 확대", "summary": "요약", "tags": ["서부지검"]},
+        {"id": 1, "title": "수사 확대", "summary": "요약", "key_facts": ["대표 소환"]},
     ]
     prompt = _build_system_prompt("사회", existing)
     assert "오늘 기존 캐시" in prompt
@@ -95,20 +95,20 @@ def test_build_user_prompt_no_history():
 
 
 def test_build_user_prompt_with_history():
-    """이전 보고 이력이 포함된다."""
+    """이전 보고 이력이 key_facts와 함께 포함된다."""
     history = [
-        {"title": "수사 확대", "summary": "요약", "tags": ["서부지검"], "category": "new", "created_at": "2026-02-11 10:00"},
+        {"title": "수사 확대", "summary": "요약", "key_facts": ["대표 소환"], "category": "new", "created_at": "2026-02-11 10:00"},
     ]
     prompt = _build_user_prompt([], history, None)
     assert "이전 보고 이력" in prompt
     assert "수사 확대" in prompt
-    assert "#서부지검" in prompt
+    assert "대표 소환" in prompt
 
 
 def test_build_user_prompt_scenario_b():
-    """시나리오 B: 기존 캐시 항목이 포함된다."""
+    """시나리오 B: 기존 캐시 항목이 key_facts와 함께 포함된다."""
     existing = [
-        {"id": 1, "title": "기존 기사", "summary": "기존 요약", "tags": ["태그1"]},
+        {"id": 1, "title": "기존 기사", "summary": "기존 요약", "key_facts": ["핵심 팩트"]},
     ]
     prompt = _build_user_prompt([], [], existing)
     assert "오늘 기존 캐시 항목" in prompt
@@ -124,7 +124,7 @@ def test_build_user_prompt_scenario_a_instruction():
 
 def test_build_user_prompt_scenario_b_instruction():
     """시나리오 B: 비교 지시가 포함된다."""
-    existing = [{"id": 1, "title": "t", "summary": "s", "tags": []}]
+    existing = [{"id": 1, "title": "t", "summary": "s", "key_facts": []}]
     prompt = _build_user_prompt([], [], existing)
     assert "비교" in prompt
 
@@ -150,9 +150,9 @@ async def test_analyze_report_articles_scenario_a():
     """시나리오 A: Claude 1회 호출로 브리핑 결과를 반환한다."""
     items = [
         {
-            "title": "뉴스1", "url": "u1", "source_indices": [1],
+            "title": "뉴스1", "source_indices": [1],
             "summary": "요약", "reason": "사유",
-            "tags": ["태그"], "category": "new",
+            "category": "new", "key_facts": ["핵심 팩트"],
             "exclusive": False, "prev_reference": None,
         },
     ]
@@ -182,16 +182,16 @@ async def test_analyze_report_articles_scenario_b():
     items = [
         {
             "action": "modified", "item_id": 1,
-            "title": "수정 기사", "url": "u1", "source_indices": [2],
+            "title": "수정 기사", "source_indices": [2],
             "summary": "갱신 요약", "reason": "새 팩트",
-            "tags": ["태그"], "category": "follow_up",
+            "category": "follow_up", "key_facts": ["대표 소환", "추가 기소"],
             "exclusive": False, "prev_reference": '2026-02-11 "원본"',
         },
         {
             "action": "added", "item_id": None,
-            "title": "새 기사", "url": "u2", "source_indices": [3],
+            "title": "새 기사", "source_indices": [3],
             "summary": "신규 요약", "reason": "사유",
-            "tags": ["태그2"], "category": "new",
+            "category": "new", "key_facts": ["신규 팩트"],
             "exclusive": True, "prev_reference": None,
         },
     ]
@@ -200,7 +200,7 @@ async def test_analyze_report_articles_scenario_b():
     mock_client = AsyncMock()
     mock_client.messages.create = AsyncMock(return_value=mock_response)
 
-    existing = [{"id": 1, "title": "기존", "summary": "요약", "tags": ["태그"]}]
+    existing = [{"id": 1, "title": "기존", "summary": "요약", "key_facts": ["대표 소환"]}]
     with patch("src.agents.report_agent.anthropic.AsyncAnthropic", return_value=mock_client):
         result = await analyze_report_articles(
             api_key="sk-test",
@@ -223,7 +223,7 @@ async def test_analyze_report_articles_empty():
     mock_client = AsyncMock()
     mock_client.messages.create = AsyncMock(return_value=mock_response)
 
-    existing = [{"id": 1, "title": "기존", "summary": "요약", "tags": ["태그"]}]
+    existing = [{"id": 1, "title": "기존", "summary": "요약", "key_facts": ["팩트"]}]
     with patch("src.agents.report_agent.anthropic.AsyncAnthropic", return_value=mock_client):
         result = await analyze_report_articles(
             api_key="sk-test",
