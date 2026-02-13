@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS report_items (
     publisher TEXT DEFAULT '',      -- 언론사명
     pub_time TEXT DEFAULT '',       -- 배포 시각 (HH:MM)
     key_facts TEXT DEFAULT '[]',   -- 핵심 팩트 JSON 배열
+    source_count INTEGER DEFAULT 1, -- 통합 출처 수
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -74,6 +75,7 @@ async def init_db(db_path: str) -> aiosqlite.Connection:
         "ALTER TABLE report_items ADD COLUMN pub_time TEXT DEFAULT ''",
         "ALTER TABLE report_items ADD COLUMN key_facts TEXT DEFAULT '[]'",
         "ALTER TABLE journalists ADD COLUMN last_report_at DATETIME",
+        "ALTER TABLE report_items ADD COLUMN source_count INTEGER DEFAULT 1",
     ]
     for sql in _migrations:
         try:

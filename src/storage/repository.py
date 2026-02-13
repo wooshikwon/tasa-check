@@ -151,10 +151,11 @@ async def save_reported_articles(
 ) -> None:
     """Claude가 분석한 기사들을 저장한다 (skip 포함).
 
-    articles 각 항목: {topic_cluster, key_facts, summary, article_urls, category, reason}
+    articles 각 항목: {topic_cluster, key_facts, summary, url, category, reason}
     """
     now = datetime.now(UTC).isoformat()
     for article in articles:
+        url = article.get("url", "")
         await db.execute(
             """
             INSERT INTO reported_articles
@@ -167,7 +168,7 @@ async def save_reported_articles(
                 article.get("topic_cluster", ""),
                 json.dumps(article.get("key_facts", []), ensure_ascii=False),
                 article.get("summary", ""),
-                json.dumps(article.get("article_urls", []), ensure_ascii=False),
+                json.dumps([url] if url else [], ensure_ascii=False),
                 article["category"],
                 article.get("reason", ""),
             ),
@@ -258,6 +259,7 @@ async def get_report_items_by_cache(
             "publisher": r["publisher"] if "publisher" in r.keys() else "",
             "pub_time": r["pub_time"] if "pub_time" in r.keys() else "",
             "key_facts": json.loads(r["key_facts"]) if "key_facts" in r.keys() else [],
+            "source_count": r["source_count"] if "source_count" in r.keys() else 1,
         }
         for r in rows
     ]
@@ -276,8 +278,8 @@ async def save_report_items(
             INSERT INTO report_items
                 (report_cache_id, title, url, summary, tags, category,
                  prev_reference, reason, exclusive, publisher, pub_time,
-                 key_facts, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 key_facts, source_count, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 report_cache_id,
@@ -292,6 +294,7 @@ async def save_report_items(
                 item.get("publisher", ""),
                 item.get("pub_time", ""),
                 json.dumps(item.get("key_facts", []), ensure_ascii=False),
+                item.get("source_count", 1),
                 now,
                 now,
             ),

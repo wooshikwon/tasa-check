@@ -11,6 +11,15 @@ _KST = timezone(timedelta(hours=9))
 _MAX_MSG_LEN = 4096
 
 
+def _publisher_label(publisher: str, source_count: int) -> str:
+    """언론사 표시 라벨. 복수 출처면 '[언론사 등 N건]' 형식."""
+    if not publisher:
+        return ""
+    if source_count > 1:
+        return f"[{publisher} 등 {source_count}건]"
+    return f"[{publisher}]"
+
+
 def format_check_header(total: int, important: int, since: "datetime", now: "datetime") -> str:
     """헤더 메시지 (HTML). since~now 검색 범위를 표시한다."""
     since_kst = since.astimezone(_KST).strftime("%Y-%m-%d %H:%M")
@@ -24,7 +33,7 @@ def format_check_header(total: int, important: int, since: "datetime", now: "dat
 def format_article_message(article: dict) -> str:
     """기사 1건을 Telegram HTML 메시지로 포맷팅한다.
 
-    article 키: category, publisher, title, summary, reason, article_urls
+    article 키: category, publisher, title, summary, reason, url
     category: "exclusive" / "important"
     """
     category = article.get("category", "")
@@ -37,14 +46,12 @@ def format_article_message(article: dict) -> str:
         title = title[len(tag):].strip()
     summary = html_module.escape(article.get("summary", ""))
     reason = html_module.escape(article.get("reason", ""))
-
-    # Claude 응답의 article_urls(리스트)에서 첫 번째 URL 추출
-    urls = article.get("article_urls", [])
-    url = urls[0] if urls else ""
-
+    url = article.get("url", "")
     pub_time = article.get("pub_time", "")
+    source_count = article.get("source_count", 1)
 
-    title_line = f"{tag} [{publisher}] {title}".strip()
+    pub_label = _publisher_label(publisher, source_count)
+    title_line = f"{tag} {pub_label} {title}".strip()
     if pub_time:
         title_line += f" ({pub_time})"
 
@@ -94,15 +101,22 @@ def format_skipped_articles(skipped: list[dict]) -> str:
     header = f"<b>스킵 {len(deduped)}건</b>"
     item_lines = []
     for article in deduped:
+        publisher = html_module.escape(article.get("publisher", ""))
         title = html_module.escape(article.get("title", "")).strip()
         reason = html_module.escape(article.get("reason", "")).strip()
-        urls = article.get("article_urls", [])
-        url = urls[0] if urls else ""
-        title_part = f'<a href="{html_module.escape(url)}">{title or "(제목 없음)"}</a>' if url else (title or "(제목 없음)")
+        url = article.get("url", "")
+        pub_time = article.get("pub_time", "")
+        source_count = article.get("source_count", 1)
+
+        pub_label = _publisher_label(publisher, source_count)
+        display = f"{pub_label} {title}".strip() if pub_label else (title or "(제목 없음)")
+        if pub_time:
+            display += f" ({pub_time})"
+        link = f'<a href="{html_module.escape(url)}">{display}</a>' if url else display
         if reason:
-            item_lines.append(f"- {title_part} → {reason}")
+            item_lines.append(f"- {link} → {reason}")
         else:
-            item_lines.append(f"- {title_part}")
+            item_lines.append(f"- {link}")
     body = "\n".join(item_lines)
     return _truncate(f"{header}\n<blockquote expandable>{body}</blockquote>")
 
@@ -169,9 +183,11 @@ def format_report_item(item: dict, scenario_b: bool = False) -> str:
     pub_time = item.get("pub_time", "")
     url = item.get("url", "")
     prev_ref = item.get("prev_reference")
+    source_count = item.get("source_count", 1)
 
-    # 태그 + [언론사] + 제목 + 시각
-    title_part = f"[{publisher}] {title}" if publisher else title
+    # 태그 + [언론사 등 N건] + 제목 + 시각
+    pub_label = _publisher_label(publisher, source_count)
+    title_part = f"{pub_label} {title}".strip() if pub_label else title
     header = f"{tag} {title_part}".strip() if tag else title_part
     if pub_time:
         header += f" ({pub_time})"
@@ -198,10 +214,18 @@ def format_unchanged_report_items(items: list[dict]) -> str:
     header = f"<b>기보고 {len(items)}건</b>"
     item_lines = []
     for item in items:
+        publisher = html_module.escape(item.get("publisher", ""))
         title = html_module.escape(item.get("title", "")).strip()
         url = item.get("url", "")
-        title_part = f'<a href="{html_module.escape(url)}">{title or "(제목 없음)"}</a>' if url else (title or "(제목 없음)")
-        item_lines.append(f"- {title_part}")
+        pub_time = item.get("pub_time", "")
+
+        source_count = item.get("source_count", 1)
+        pub_label = _publisher_label(publisher, source_count)
+        display = f"{pub_label} {title}".strip() if pub_label else (title or "(제목 없음)")
+        if pub_time:
+            display += f" ({pub_time})"
+        link = f'<a href="{html_module.escape(url)}">{display}</a>' if url else display
+        item_lines.append(f"- {link}")
     body = "\n".join(item_lines)
     return _truncate(f"{header}\n<blockquote expandable>{body}</blockquote>")
 

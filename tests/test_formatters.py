@@ -22,7 +22,7 @@ def test_format_article_exclusive():
         "title": "서부지법 영장 기각",
         "summary": "서부지법이 구속영장을 기각했다.",
         "reason": "검찰 수사에 영향",
-        "article_urls": ["https://example.com/1"],
+        "url": "https://example.com/1",
     })
     assert "[단독]" in msg
     assert "연합뉴스" in msg
@@ -38,22 +38,35 @@ def test_format_article_important():
         "title": "수사 확대",
         "summary": "임원 추가 소환",
         "reason": "새로운 전개",
-        "article_urls": ["https://example.com/2"],
+        "url": "https://example.com/2",
     })
     assert "[단독]" not in msg
     assert "[속보]" not in msg
     assert "한겨레" in msg
 
 
-def test_format_article_no_urls():
-    """article_urls가 빈 배열이면 링크 없이 출력된다."""
+def test_format_article_multi_source():
+    """source_count > 1이면 '[언론사 등 N건]' 형식으로 표시된다."""
+    msg = format_article_message({
+        "category": "important",
+        "publisher": "헤럴드경제",
+        "title": "수사 확대",
+        "summary": "요약",
+        "reason": "",
+        "url": "https://example.com/1",
+        "source_count": 3,
+    })
+    assert "[헤럴드경제 등 3건]" in msg
+
+
+def test_format_article_no_url():
+    """url이 없으면 링크 없이 출력된다."""
     msg = format_article_message({
         "category": "important",
         "publisher": "테스트",
         "title": "제목",
         "summary": "요약",
         "reason": "",
-        "article_urls": [],
     })
     assert "기사 원문" not in msg
 
@@ -66,7 +79,6 @@ def test_format_article_truncation():
         "title": "제목",
         "summary": "A" * 5000,
         "reason": "",
-        "article_urls": [],
     })
     assert len(msg) <= 4096
 
@@ -79,7 +91,6 @@ def test_format_article_html_escaping():
         "title": "<script>alert</script>",
         "summary": "본문",
         "reason": "",
-        "article_urls": [],
     })
     assert "<script>" not in msg
     assert "&amp;" in msg

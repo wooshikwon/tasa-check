@@ -108,15 +108,17 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
             valid_sources = [i for i in sources if 1 <= i <= n]
             valid_merged = [i for i in merged if 1 <= i <= n]
 
-            r["article_urls"] = [articles_for_analysis[i - 1]["url"] for i in valid_sources]
-            r["merged_from"] = [articles_for_analysis[i - 1]["url"] for i in valid_merged]
+            r["source_count"] = len(valid_sources) + len(valid_merged)
             if valid_sources:
                 src = articles_for_analysis[valid_sources[0] - 1]
+                r["url"] = src["url"]
                 r["publisher"] = src["publisher"]
                 pub_date = src.get("pubDate", "")
                 r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
-            elif not r.get("publisher"):
-                r["publisher"] = ""
+            else:
+                r.setdefault("url", "")
+                r.setdefault("publisher", "")
+                r.setdefault("pub_time", "")
 
     return results, since, now
 
@@ -201,6 +203,7 @@ async def _run_report_pipeline(
         for r in results:
             source_indices = r.pop("source_indices", [])
             valid_sources = [i for i in source_indices if 1 <= i <= n]
+            r["source_count"] = len(valid_sources)
             if valid_sources:
                 src = articles_for_analysis[valid_sources[0] - 1]
                 r["url"] = src["link"]
