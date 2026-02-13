@@ -22,11 +22,11 @@ from src.storage.repository import cleanup_old_data
 from src.bot.conversation import build_conversation_handler
 from src.bot.handlers import (
     check_handler, report_handler,
-    set_apikey_handler, set_keyword_handler,
     set_division_handler, set_division_callback,
-    stats_handler,
+    status_handler, stats_handler,
 )
-from src.bot.scheduler import schedule_handler, restore_schedules
+from src.bot.settings import build_settings_handler
+from src.bot.scheduler import restore_schedules
 
 logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -85,21 +85,18 @@ def main() -> None:
     # /report 부서 뉴스 브리핑
     app.add_handler(CommandHandler("report", report_handler))
 
-    # /set_apikey API 키 변경
-    app.add_handler(CommandHandler("set_apikey", set_apikey_handler))
-
-    # /set_keyword 키워드 변경
-    app.add_handler(CommandHandler("set_keyword", set_keyword_handler))
+    # /set_keyword, /set_apikey, /schedule (2단계 대화형)
+    app.add_handler(build_settings_handler())
 
     # /set_division 부서 변경
     app.add_handler(CommandHandler("set_division", set_division_handler))
     app.add_handler(CallbackQueryHandler(set_division_callback, pattern="^setdiv:"))
 
+    # /status 현재 설정 조회
+    app.add_handler(CommandHandler("status", status_handler))
+
     # /stats 관리자 전용 통계
     app.add_handler(CommandHandler("stats", stats_handler))
-
-    # /schedule 자동 실행 예약
-    app.add_handler(CommandHandler("schedule", schedule_handler))
 
     logger.info("봇 시작 (polling)")
     app.run_polling()

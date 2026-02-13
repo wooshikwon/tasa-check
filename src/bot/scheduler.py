@@ -1,11 +1,10 @@
-"""스케줄 자동 실행 — /schedule 핸들러 + JobQueue 콜백 + 서버 시작 시 복원."""
+"""스케줄 자동 실행 — JobQueue 콜백 + 서버 시작 시 복원."""
 
 import asyncio
 import logging
-import re
+
 from datetime import datetime, time, timedelta, timezone
 
-from telegram import Update
 from telegram.ext import Application, ContextTypes
 
 from src.storage import repository as repo
@@ -213,100 +212,3 @@ async def restore_schedules(app: Application, db) -> None:
         )
     if schedules:
         logger.info("스케줄 복원 완료: %d건", len(schedules))
-
-
-# --- /schedule 명령 핸들러 ---
-
-_TIME_RE = re.compile(r"^\d{2}:\d{2}$")
-_MAX_TIMES = {"check": 60, "report": 3}
-
-
-async def schedule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/schedule 명령 처리. 자동 실행 예약 관리."""
-    db = context.bot_data["db"]
-    telegram_id = str(update.effective_user.id)
-
-    journalist = await repo.get_journalist(db, telegram_id)
-    if not journalist:
-        await update.message.reply_text("프로필이 없습니다. /start로 등록해주세요.")
-        return
-
-    args = context.args or []
-
-    # /schedule — 현재 설정 표시
-    if not args:
-        schedules = await repo.get_schedules(db, journalist["id"])
-        if not schedules:
-            await update.message.reply_text(
-                "예약된 자동 실행이 없습니다.\n\n"
-                "사용법:\n"
-                "/schedule check 09:00 12:00 — 매일 자동 타사 체크\n"
-                "/schedule report 08:30 — 매일 자동 브리핑\n"
-                "/schedule off — 전체 해제"
-            )
-            return
-
-        check_times = [s["time_kst"] for s in schedules if s["command"] == "check"]
-        report_times = [s["time_kst"] for s in schedules if s["command"] == "report"]
-
-        lines = ["현재 자동 실행 설정:"]
-        if check_times:
-            lines.append(f"  check: {', '.join(check_times)}")
-        if report_times:
-            lines.append(f"  report: {', '.join(report_times)}")
-        lines.append("\n/schedule off — 전체 해제")
-        await update.message.reply_text("\n".join(lines))
-        return
-
-    # /schedule off — 전체 해제
-    if args[0] == "off":
-        await repo.delete_all_schedules(db, journalist["id"])
-        unregister_jobs(context.application, journalist["id"])
-        await update.message.reply_text("모든 자동 실행이 해제되었습니다.")
-        return
-
-    # /schedule check HH:MM ... 또는 /schedule report HH:MM ...
-    command = args[0].lower()
-    if command not in ("check", "report"):
-        await update.message.reply_text(
-            "사용법: /schedule check 09:00 12:00 또는 /schedule report 08:30"
-        )
-        return
-
-    times = args[1:]
-    if not times:
-        await update.message.reply_text(
-            f"시각을 입력해주세요. 예: /schedule {command} 09:00 12:00"
-        )
-        return
-
-    # 시각 형식 검증
-    max_count = _MAX_TIMES[command]
-    if len(times) > max_count:
-        await update.message.reply_text(f"{command}은 최대 {max_count}개까지 설정 가능합니다.")
-        return
-
-    valid_times = []
-    for t in times:
-        if not _TIME_RE.match(t):
-            await update.message.reply_text(
-                f"시각 형식이 올바르지 않습니다: {t}\nHH:MM 형식으로 입력해주세요."
-            )
-            return
-        h, m = map(int, t.split(":"))
-        if not (0 <= h <= 23 and 0 <= m <= 59):
-            await update.message.reply_text(f"유효하지 않은 시각입니다: {t}")
-            return
-        valid_times.append(t)
-
-    # DB 저장 + JobQueue 등록
-    await repo.save_schedules(db, journalist["id"], command, valid_times)
-    unregister_jobs(context.application, journalist["id"], command=command)
-    for t in valid_times:
-        register_job(context.application, command, journalist["id"], telegram_id, t)
-
-    times_str = ", ".join(valid_times)
-    await update.message.reply_text(
-        f"자동 {command} 설정 완료!\n"
-        f"매일 {times_str}에 자동 실행됩니다."
-    )

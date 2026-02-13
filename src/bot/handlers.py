@@ -440,72 +440,6 @@ async def _handle_report_scenario_b(
         )
 
 
-async def set_apikey_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/set_apikey 명령 처리. API 키 변경."""
-    db = context.bot_data["db"]
-    telegram_id = str(update.effective_user.id)
-
-    journalist = await repo.get_journalist(db, telegram_id)
-    if not journalist:
-        await update.message.reply_text("프로필이 없습니다. /start로 등록해주세요.")
-        return
-
-    args = context.args
-    if args:
-        new_key = args[0]
-        if not new_key.startswith("sk-"):
-            await update.message.reply_text("API 키 형식이 올바르지 않습니다.")
-            return
-
-        # 키가 포함된 메시지 삭제 시도
-        try:
-            await update.message.delete()
-        except Exception:
-            pass
-
-        await repo.update_api_key(db, telegram_id, new_key)
-        await update.effective_chat.send_message("API 키가 변경되었습니다.")
-    else:
-        await update.message.reply_text(
-            "사용법: /set_apikey sk-ant-your-new-key\n"
-            "(입력 후 메시지가 자동 삭제됩니다)"
-        )
-
-
-async def set_keyword_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/set_keyword 명령 처리. 키워드 변경 + check 이력 초기화."""
-    db = context.bot_data["db"]
-    telegram_id = str(update.effective_user.id)
-
-    journalist = await repo.get_journalist(db, telegram_id)
-    if not journalist:
-        await update.message.reply_text("프로필이 없습니다. /start로 등록해주세요.")
-        return
-
-    raw = " ".join(context.args) if context.args else ""
-    if not raw.strip():
-        current = ", ".join(journalist["keywords"])
-        await update.message.reply_text(
-            f"현재 키워드: {current}\n\n"
-            f"사용법: /set_keyword 서부지검, 서부지법"
-        )
-        return
-
-    keywords = [k.strip() for k in raw.split(",") if k.strip()]
-    if not keywords:
-        await update.message.reply_text("키워드를 1개 이상 입력해주세요. (쉼표 구분)")
-        return
-
-    await repo.update_keywords(db, telegram_id, keywords)
-    await repo.clear_check_data(db, journalist["id"])
-
-    keywords_str = ", ".join(keywords)
-    await update.message.reply_text(
-        f"키워드가 변경되었습니다: {keywords_str}\n"
-        f"체크 이력이 초기화되었습니다."
-    )
-
-
 async def set_division_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/set_division 명령 처리. 부서 변경 InlineKeyboard 표시."""
     db = context.bot_data["db"]
@@ -555,6 +489,44 @@ async def set_division_callback(update: Update, context: ContextTypes.DEFAULT_TY
         f"부서가 {new_dept}(으)로 변경되었습니다.\n"
         f"이전 체크/브리핑 이력이 초기화되었습니다."
     )
+
+
+async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/status 명령 처리. 현재 설정 표시."""
+    db = context.bot_data["db"]
+    telegram_id = str(update.effective_user.id)
+
+    journalist = await repo.get_journalist(db, telegram_id)
+    if not journalist:
+        await update.message.reply_text("프로필이 없습니다. /start로 등록해주세요.")
+        return
+
+    dept = journalist["department"]
+    dept_label = dept if dept.endswith("부") else f"{dept}부"
+    keywords = ", ".join(journalist["keywords"]) if journalist["keywords"] else "(없음)"
+
+    # API Key 마스킹 (앞 7자리 + ****)
+    api_key = journalist.get("api_key", "")
+    masked_key = f"{api_key[:7]}****" if len(api_key) >= 7 else "(미설정)"
+
+    # 스케줄 조회
+    schedules = await repo.get_schedules(db, journalist["id"])
+    check_times = [s["time_kst"] for s in schedules if s["command"] == "check"]
+    report_times = [s["time_kst"] for s in schedules if s["command"] == "report"]
+
+    check_sched = ", ".join(check_times) if check_times else "(없음)"
+    report_sched = ", ".join(report_times) if report_times else "(없음)"
+
+    lines = [
+        "현재 설정:",
+        f"  부서: {dept_label}",
+        f"  키워드: {keywords}",
+        f"  API Key: {masked_key}",
+        "",
+        f"  check 스케줄: {check_sched}",
+        f"  report 스케줄: {report_sched}",
+    ]
+    await update.message.reply_text("\n".join(lines))
 
 
 async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
