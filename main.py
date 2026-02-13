@@ -60,7 +60,7 @@ async def post_init(application: Application) -> None:
     await application.bot.set_my_commands([
         BotCommand("check", "키워드 기반 타사 체크"),
         BotCommand("report", "부서 주요 뉴스 브리핑"),
-        BotCommand("schedule", "자동 실행 예약 설정"),
+        BotCommand("set_schedule", "자동 실행 예약 설정"),
         BotCommand("status", "현재 설정 조회"),
         BotCommand("set_keyword", "모니터링 키워드 변경"),
         BotCommand("set_apikey", "Claude API 키 변경"),

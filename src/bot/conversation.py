@@ -109,7 +109,7 @@ async def receive_api_key(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"/report - 부서 주요 뉴스 브리핑\n"
         f"\n"
         f"[자동 실행]\n"
-        f"/schedule - 예약 설정\n"
+        f"/set_schedule - 예약 설정\n"
         f"\n"
         f"[설정 변경]\n"
         f"/set_apikey - Claude API 키 변경\n"

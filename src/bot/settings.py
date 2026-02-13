@@ -245,7 +245,7 @@ def build_settings_handler() -> ConversationHandler:
         entry_points=[
             CommandHandler("set_keyword", set_keyword_entry),
             CommandHandler("set_apikey", set_apikey_entry),
-            CommandHandler("schedule", schedule_entry),
+            CommandHandler("set_schedule", schedule_entry),
         ],
         states={
             AWAIT_KEYWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_keyword)],
