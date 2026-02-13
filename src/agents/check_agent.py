@@ -27,13 +27,16 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 
 [키워드 관련성 필터 - 최우선 기준]
 아래 기사들은 키워드로 검색된 결과이나, 검색 API 특성상 키워드와 무관한 기사가 포함될 수 있다.
-반드시 기사 내용이 위 키워드와 직접적으로 관련된 경우에만 판단 대상으로 삼는다.
-- "직접 관련"이란: 기사에 해당 키워드의 기관/장소/인물이 실제로 등장하거나, 해당 관할/소관 사안을 다루는 경우
-- 동일 분야라도 다른 기관/관할의 기사는 관련 없는 것으로 판단한다
-- 키워드에 명시된 기관만 대상이다. 상위/하위/동급 다른 기관은 별개로 취급한다
+이 필터는 모든 판단(단독, 주요도, 중복 등)보다 먼저 적용된다.
+반드시 기사의 주체·대상이 위 키워드에 명시된 기업/기관/인물과 직접 일치하는 경우에만 판단 대상으로 삼는다.
+- 같은 업종·분야라도 키워드에 없는 기업/기관의 기사는 관련 없는 것으로 판단한다
+  예) "엔비디아" → 삼성전자 반도체, TSMC 등 다른 반도체 기업은 skip
+  예) "구글" → 네이버, 카카오 등 다른 IT 기업은 skip
   예) "서울경찰청" → 충북경찰청, 경남경찰청 등 다른 지방청은 skip
   예) "서부지법" → 서울중앙지법, 수원지법 등은 skip
-- 키워드와 무관한 기사는 기사 가치와 무관하게 반드시 skip 처리한다
+- 키워드 기업/기관이 기사에 부수적으로만 언급되는 경우도 skip
+  예) 키워드 "엔비디아" → "삼성전자가 엔비디아向 HBM 납품" → 주체가 삼성전자이므로 skip
+- 키워드와 무관한 기사는 [단독] 태그 여부나 기사 가치와 무관하게 반드시 skip 처리한다
 
 [주요 기사 판단 기준 - {dept_label}]
 키워드 관련성을 통과한 기사에 한해, 아래 기준으로 판단한다:
@@ -44,8 +47,9 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 - 사회적 맥락: 진행 중 주요 이슈와 직접 연결, 후속 보도 가능성 높음
 - 시의성: 방금 발생/확인된 사건, 오늘/내일 중 결정 예정
 
-[단독 기사 식별 — 최우선 선정 대상]
-- 제목에 [단독] 태그가 있으면 무조건 선정
+[단독 기사 식별]
+키워드 관련성 필터를 통과한 기사에 한해 적용한다.
+- 제목에 [단독] 태그가 있으면 우선 선정
 - 제목에 없더라도 본문에 "OO 취재에 따르면", "본지 취재 결과" 등 '취재에 따르면' 패턴이 있으면 자체 취재 = 사실상 단독
 - 본문 어미로 기사 가치 판단:
   · "알려졌다", "전해졌다" → 풍문 수준, 팩트 확인 약함
@@ -257,53 +261,8 @@ def _build_system_prompt(keywords: list[str], department: str) -> str:
     )
 
 
-async def analyze_articles(
-    api_key: str,
-    articles: list[dict],
-    history: list[dict],
-    department: str,
-    keywords: list[str] | None = None,
-) -> list[dict]:
-    """Claude API로 기사를 분석한다 (tool_use 방식).
-
-    Args:
-        api_key: 기자의 Anthropic API 키
-        articles: 수집된 기사 목록 (title, publisher, body, url, pubDate)
-        history: 최근 24시간 보고 이력
-        department: 기자 부서
-        keywords: 기자의 취재 키워드 목록
-
-    Returns:
-        분석 결과 리스트 (주요 + 스킵 병합). 주요 항목은 전체 필드,
-        스킵 항목은 category, topic_cluster, source_indices, title, reason만 포함.
-    """
-    system_prompt = _build_system_prompt(keywords or [], department)
-    user_prompt = _build_user_prompt(articles, history, department)
-
-    langfuse = get_langfuse()
-    with langfuse.start_as_current_observation(
-        as_type="span", name="check_agent", metadata={"department": department},
-    ):
-        client = anthropic.AsyncAnthropic(api_key=api_key)
-        message = await client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=16384,
-            temperature=0.0,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-            tools=[_ANALYSIS_TOOL],
-            tool_choice={"type": "tool", "name": "submit_analysis"},
-        )
-
-    stop_reason = message.stop_reason
-    input_tokens = message.usage.input_tokens
-    output_tokens = message.usage.output_tokens
-    logger.info(
-        "Claude 응답: stop_reason=%s, input=%d tokens, output=%d tokens",
-        stop_reason, input_tokens, output_tokens,
-    )
-
-    # tool_use 블록에서 결과 추출 (results + skipped 병합)
+def _parse_analysis_response(message) -> list[dict] | None:
+    """tool_use 응답에서 분석 결과를 추출한다. 파싱 실패 시 None."""
     for block in message.content:
         if block.type == "tool_use" and block.name == "submit_analysis":
             raw_input = block.input
@@ -317,6 +276,9 @@ async def analyze_articles(
                     len(raw_results), len(results), len(raw_skipped), len(skipped),
                     list(raw_input.keys()),
                 )
+            # 원본 데이터가 있는데 필터링 후 전부 소실 → 파싱 실패
+            if not results and not skipped and (raw_results or raw_skipped):
+                return None
             if not results and not skipped:
                 logger.warning("빈 결과 반환됨, tool input keys=%s", list(raw_input.keys()))
             for s in skipped:
@@ -324,6 +286,73 @@ async def analyze_articles(
             combined = results + skipped
             logger.info("분석 결과: 주요 %d건, 스킵 %d건", len(results), len(skipped))
             return combined
+    # tool_use 블록 없음
+    return None
 
-    logger.error("tool_use 응답을 찾을 수 없음: stop_reason=%s", stop_reason)
-    return []
+
+async def analyze_articles(
+    api_key: str,
+    articles: list[dict],
+    history: list[dict],
+    department: str,
+    keywords: list[str] | None = None,
+) -> list[dict]:
+    """Claude API로 기사를 분석한다 (tool_use 방식, 파싱 실패 시 최대 2회 재시도).
+
+    Args:
+        api_key: 기자의 Anthropic API 키
+        articles: 수집된 기사 목록 (title, publisher, body, url, pubDate)
+        history: 최근 24시간 보고 이력
+        department: 기자 부서
+        keywords: 기자의 취재 키워드 목록
+
+    Returns:
+        분석 결과 리스트 (주요 + 스킵 병합).
+
+    Raises:
+        RuntimeError: 3회 시도 후에도 파싱 실패 시
+    """
+    system_prompt = _build_system_prompt(keywords or [], department)
+    user_prompt = _build_user_prompt(articles, history, department)
+
+    langfuse = get_langfuse()
+
+    for attempt in range(3):
+        # 재시도 시 temperature를 올려 동일 실패 패턴 회피
+        temperature = 0.0 if attempt == 0 else 0.2
+
+        with langfuse.start_as_current_observation(
+            as_type="span", name="check_agent",
+            metadata={"department": department, "attempt": attempt + 1},
+        ):
+            client = anthropic.AsyncAnthropic(api_key=api_key)
+            message = await client.messages.create(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=16384,
+                temperature=temperature,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+                tools=[_ANALYSIS_TOOL],
+                tool_choice={"type": "tool", "name": "submit_analysis"},
+            )
+
+        logger.info(
+            "Claude 응답 (attempt %d): stop_reason=%s, input=%d tokens, output=%d tokens",
+            attempt + 1, message.stop_reason,
+            message.usage.input_tokens, message.usage.output_tokens,
+        )
+
+        parsed = _parse_analysis_response(message)
+        if parsed is not None:
+            # 기사가 제공됐는데 빈 결과 → 이상 응답 (모든 기사는 분류되어야 함)
+            if not parsed:
+                if attempt < 2:
+                    logger.warning("빈 결과 반환 (기사 %d건, attempt %d), 재시도", len(articles), attempt + 1)
+                    continue
+                raise RuntimeError("분석 결과 빈 배열 (3회 시도)")
+            return parsed
+
+        if attempt < 2:
+            logger.warning("파싱 실패 (attempt %d), 재시도", attempt + 1)
+
+    raise RuntimeError("분석 응답 파싱 실패 (3회 시도)")

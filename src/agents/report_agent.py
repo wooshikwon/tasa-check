@@ -410,6 +410,26 @@ def _build_user_prompt(
     return "\n\n".join(sections)
 
 
+def _parse_report_response(message, scenario: str) -> list[dict] | None:
+    """tool_use 응답에서 브리핑 결과를 추출한다. 파싱 실패 시 None."""
+    for block in message.content:
+        if block.type == "tool_use" and block.name == "submit_report":
+            raw_results = block.input.get("results", [])
+            results = [r for r in raw_results if isinstance(r, dict)]
+            if len(results) != len(raw_results):
+                logger.warning(
+                    "타입 필터링 발생: results %d→%d",
+                    len(raw_results), len(results),
+                )
+            # 원본 데이터가 있는데 필터링 후 전부 소실 → 파싱 실패
+            if not results and raw_results:
+                return None
+            logger.info("브리핑 결과: %d건 (시나리오 %s)", len(results), scenario)
+            return results
+    # tool_use 블록 없음
+    return None
+
+
 async def analyze_report_articles(
     api_key: str,
     articles: list[dict],
@@ -417,7 +437,7 @@ async def analyze_report_articles(
     existing_items: list[dict] | None,
     department: str,
 ) -> list[dict]:
-    """Claude API로 기사를 분석하여 브리핑을 생성한다 (tool_use 방식).
+    """Claude API로 기사를 분석하여 브리핑을 생성한다 (tool_use 방식, 파싱 실패 시 최대 2회 재시도).
 
     Args:
         api_key: Anthropic API 키
@@ -427,9 +447,10 @@ async def analyze_report_articles(
         department: 부서명
 
     Returns:
-        브리핑 항목 리스트.
-        시나리오 A: [{title, source_indices, summary, reason, category, key_facts, exclusive, prev_reference}]
-        시나리오 B: [{action, item_id, ...} + 위와 동일]
+        브리핑 항목 리스트. 빈 배열은 유효 (중요 기사 없음 또는 변경 없음).
+
+    Raises:
+        RuntimeError: 3회 시도 후에도 파싱 실패 시
     """
     system_prompt = _build_system_prompt(department, existing_items)
     user_prompt = _build_user_prompt(articles, report_history, existing_items)
@@ -438,35 +459,37 @@ async def analyze_report_articles(
     scenario = "B" if is_scenario_b else "A"
 
     langfuse = get_langfuse()
-    with langfuse.start_as_current_observation(
-        as_type="span", name="report_agent",
-        metadata={"department": department, "scenario": scenario},
-    ):
-        client = anthropic.AsyncAnthropic(api_key=api_key)
-        message = await client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=16384,
-            temperature=0.0,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-            tools=[_REPORT_TOOL],
-            tool_choice={"type": "tool", "name": "submit_report"},
+
+    for attempt in range(3):
+        # 재시도 시 temperature를 올려 동일 실패 패턴 회피
+        temperature = 0.0 if attempt == 0 else 0.2
+
+        with langfuse.start_as_current_observation(
+            as_type="span", name="report_agent",
+            metadata={"department": department, "scenario": scenario, "attempt": attempt + 1},
+        ):
+            client = anthropic.AsyncAnthropic(api_key=api_key)
+            message = await client.messages.create(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=16384,
+                temperature=temperature,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+                tools=[_REPORT_TOOL],
+                tool_choice={"type": "tool", "name": "submit_report"},
+            )
+
+        logger.info(
+            "Claude 응답 (attempt %d): stop_reason=%s, input=%d tokens, output=%d tokens",
+            attempt + 1, message.stop_reason,
+            message.usage.input_tokens, message.usage.output_tokens,
         )
 
-    input_tokens = message.usage.input_tokens
-    output_tokens = message.usage.output_tokens
-    logger.info(
-        "Claude 응답: stop_reason=%s, input=%d tokens, output=%d tokens",
-        message.stop_reason, input_tokens, output_tokens,
-    )
+        parsed = _parse_report_response(message, scenario)
+        if parsed is not None:
+            return parsed
 
-    # tool_use 블록에서 results 추출
-    for block in message.content:
-        if block.type == "tool_use" and block.name == "submit_report":
-            results = block.input.get("results", [])
-            results = [r for r in results if isinstance(r, dict)]
-            logger.info("브리핑 결과: %d건 (시나리오 %s)", len(results), scenario)
-            return results
+        if attempt < 2:
+            logger.warning("파싱 실패 (attempt %d), 재시도", attempt + 1)
 
-    logger.error("tool_use 응답을 찾을 수 없음: stop_reason=%s", message.stop_reason)
-    return []
+    raise RuntimeError("브리핑 응답 파싱 실패 (3회 시도)")

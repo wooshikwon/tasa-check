@@ -238,7 +238,7 @@ async def test_analyze_report_articles_empty():
 
 @pytest.mark.asyncio
 async def test_analyze_report_articles_no_tool_use():
-    """tool_use 응답이 없으면 빈 배열 반환."""
+    """tool_use 응답이 없으면 재시도 후 RuntimeError 발생."""
     text_block = MagicMock()
     text_block.type = "text"
     text_block.text = "분석 불가"
@@ -252,12 +252,14 @@ async def test_analyze_report_articles_no_tool_use():
     mock_client.messages.create = AsyncMock(return_value=response)
 
     with patch("src.agents.report_agent.anthropic.AsyncAnthropic", return_value=mock_client):
-        result = await analyze_report_articles(
-            api_key="sk-test",
-            articles=[],
-            report_history=[],
-            existing_items=None,
-            department="사회",
-        )
+        with pytest.raises(RuntimeError, match="파싱 실패"):
+            await analyze_report_articles(
+                api_key="sk-test",
+                articles=[],
+                report_history=[],
+                existing_items=None,
+                department="사회",
+            )
 
-    assert result == []
+    # 3회 호출 (초회 + 재시도 2회)
+    assert mock_client.messages.create.call_count == 3
