@@ -1,6 +1,6 @@
 """네이버 뉴스 기사 본문 스크래퍼.
 
-n.news.naver.com 기사 페이지에서 본문 첫 3문단을 추출한다.
+n.news.naver.com 기사 페이지에서 본문을 추출한다 (최대 800자).
 소제목·사진 캡션을 건너뛰고 실제 본문 문단만 가져온다.
 """
 
@@ -20,7 +20,7 @@ _HEADERS = {
         "Chrome/131.0.0.0 Safari/537.36"
     ),
 }
-_MAX_PARAGRAPHS = 3
+_MAX_CHARS = 800
 _SUBHEADING_MARKERS = set("▶■◆●△▷▲►◇□★☆※➤")
 
 
@@ -42,10 +42,10 @@ def _is_subheading(text: str, tag=None) -> bool:
 
 
 def _parse_article_body(html: str) -> str | None:
-    """HTML에서 기사 본문 첫 3문단을 추출한다.
+    """HTML에서 기사 본문을 추출한다 (최대 800자).
 
-    네이버 뉴스 기사 구조(소제목 → 사진 → 본문)를 고려하여
-    소제목과 사진 캡션을 건너뛰고 실제 본문 문단만 가져온다.
+    소제목과 사진 캡션을 건너뛰고 실제 본문 문단만 수집하되,
+    총 글자 수가 800자를 넘으면 수집을 중단한다.
     """
     soup = BeautifulSoup(html, "html.parser")
 
@@ -58,6 +58,7 @@ def _parse_article_body(html: str) -> str | None:
 
     # <p> 태그에서 문단 추출 (소제목·캡션 제외)
     paragraphs: list[str] = []
+    total_chars = 0
     for p_tag in container.find_all("p"):
         # 사진/이미지 래퍼 안의 <p>는 캡션이므로 건너뜀
         if p_tag.find_parent(
@@ -70,7 +71,8 @@ def _parse_article_body(html: str) -> str | None:
         if _is_subheading(text, p_tag):
             continue
         paragraphs.append(text)
-        if len(paragraphs) >= _MAX_PARAGRAPHS:
+        total_chars += len(text)
+        if total_chars >= _MAX_CHARS:
             break
 
     # <p> 태그가 없으면 컨테이너의 직접 텍스트를 줄바꿈 기준으로 분리
@@ -83,17 +85,21 @@ def _parse_article_body(html: str) -> str | None:
             if _is_subheading(line):
                 continue
             paragraphs.append(line)
-            if len(paragraphs) >= _MAX_PARAGRAPHS:
+            total_chars += len(line)
+            if total_chars >= _MAX_CHARS:
                 break
 
     if not paragraphs:
         return None
 
-    return "\n".join(paragraphs)
+    body = "\n".join(paragraphs)
+    if len(body) > _MAX_CHARS:
+        body = body[:_MAX_CHARS]
+    return body
 
 
 async def fetch_article_body(url: str) -> str | None:
-    """단일 URL에서 기사 본문 첫 3문단을 가져온다.
+    """단일 URL에서 기사 본문을 가져온다 (최대 800자).
 
     네트워크 오류, HTTP 오류, 파싱 실패 시 None을 반환한다.
     """

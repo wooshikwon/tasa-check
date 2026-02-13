@@ -2,6 +2,7 @@
 
 수집된 기사 목록을 Claude API로 분석하여
 [단독]/[주요]/[스킵]을 분류하고, 요약과 판단 근거를 생성한다.
+Haiku 사전 필터로 키워드 무관 기사를 제거한 뒤 Sonnet으로 분석한다.
 """
 
 import logging
@@ -11,10 +12,121 @@ import anthropic
 from langfuse import get_client as get_langfuse
 
 from src.config import DEPARTMENT_PROFILES
+from src.filters.publisher import get_publisher_name
 
 _KST = timezone(timedelta(hours=9))
 
 logger = logging.getLogger(__name__)
+
+
+def _dept_label(department: str) -> str:
+    """부서명에 '부'가 없으면 붙인다."""
+    return department if department.endswith("부") else f"{department}부"
+
+
+# ── Haiku 사전 필터 ─────────────────────────────────────────
+
+_CHECK_FILTER_TOOL = {
+    "name": "filter_news",
+    "description": "키워드 관련 기사 번호를 선별합니다",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "selected_indices": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "선별된 기사 번호 배열",
+            },
+        },
+        "required": ["selected_indices"],
+    },
+}
+
+
+async def filter_check_articles(
+    api_key: str,
+    articles: list[dict],
+    keywords: list[str],
+    department: str,
+) -> list[dict]:
+    """Haiku LLM으로 키워드 관련 기사를 사전 필터링한다.
+
+    본문 스크래핑 전에 제목+description만으로 판단하여
+    키워드 무관 기사, 사진 캡션, 중복 사안, 명백한 홍보성을 제거한다.
+
+    Args:
+        api_key: Anthropic API 키
+        articles: 언론사/제목 필터 후 기사 리스트 (search_news 반환 형태)
+        keywords: 기자의 취재 키워드 목록
+        department: 부서명
+
+    Returns:
+        필터 통과한 기사 리스트
+    """
+    if not articles:
+        return []
+
+    dept_label = _dept_label(department)
+    profile = DEPARTMENT_PROFILES.get(dept_label, {})
+    coverage = profile.get("coverage", "")
+    keywords_joined = ", ".join(keywords) if keywords else "(키워드 없음)"
+
+    # 기사 목록 텍스트 조립 (번호, 언론사, 제목, description)
+    lines = []
+    for i, a in enumerate(articles, 1):
+        pub = get_publisher_name(a.get("originallink", "")) or "?"
+        title = a.get("title", "")
+        desc = a.get("description", "")
+        lines.append(f"[{i}] {pub} | {title} | {desc}")
+    article_list_text = "\n".join(lines)
+
+    system_prompt = (
+        f"당신은 {dept_label} 뉴스 필터입니다.\n"
+        f"기자의 취재 키워드: {keywords_joined}\n\n"
+        "아래 기사 목록에서 다음 기준으로 기사 번호를 선별하세요:\n"
+        "1. 키워드 관련성: 키워드의 기관/기업/인물(관련 인물, 기관장 등 포함)이 등장하는 기사만 포함\n"
+        "2. 사진 캡션 제외: 본문 없이 사진 설명만 있는 포토뉴스 제외\n"
+        "3. 중복 사안 정리: 같은 사안의 다수 기사 중 정보가 가장 풍부한 기사(최대 3건)만 선별\n"
+        "4. 애매한 경우 포함 쪽으로 판단\n\n"
+        "filter_news 도구로 선별된 기사 번호를 제출하세요."
+    )
+
+    langfuse = get_langfuse()
+    with langfuse.start_as_current_observation(
+        as_type="span", name="check_filter",
+        metadata={"department": department, "input_count": len(articles)},
+    ):
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+        message = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=2048,
+            temperature=0.0,
+            system=system_prompt,
+            messages=[{"role": "user", "content": article_list_text}],
+            tools=[_CHECK_FILTER_TOOL],
+            tool_choice={"type": "tool", "name": "filter_news"},
+        )
+
+    # tool_use 응답에서 인덱스 추출
+    for block in message.content:
+        if block.type == "tool_use" and block.name == "filter_news":
+            indices = block.input.get("selected_indices", [])
+            # 1-based → 0-based 변환, 범위 검증
+            filtered = []
+            for idx in indices:
+                if isinstance(idx, int) and 1 <= idx <= len(articles):
+                    filtered.append(articles[idx - 1])
+            logger.info(
+                "LLM 필터 결과: %d건 → %d건 (부서: %s)",
+                len(articles), len(filtered), department,
+            )
+            return filtered
+
+    logger.warning("LLM 필터 tool_use 응답 없음, 전체 기사 반환")
+    return articles
+
+
+# ── Sonnet 분석 ─────────────────────────────────────────────
 
 _SYSTEM_PROMPT_TEMPLATE = """\
 당신은 {dept_label} 기자의 타사 체크 보조입니다.
@@ -249,11 +361,6 @@ def _build_user_prompt(
     )
 
     return "\n\n".join(sections)
-
-
-def _dept_label(department: str) -> str:
-    """부서명에 '부'가 없으면 붙인다."""
-    return department if department.endswith("부") else f"{department}부"
 
 
 def _build_system_prompt(keywords: list[str], department: str) -> str:

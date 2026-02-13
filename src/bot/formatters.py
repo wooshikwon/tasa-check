@@ -12,11 +12,11 @@ _MAX_MSG_LEN = 4096
 
 
 def _publisher_label(publisher: str, source_count: int) -> str:
-    """언론사 표시 라벨. 복수 출처면 '[언론사 등 N건]' 형식."""
+    """언론사 표시 라벨. 복수 출처면 '[언론사 등 다수언론사]' 형식."""
     if not publisher:
         return ""
     if source_count > 1:
-        return f"[{publisher} 등 {source_count}건]"
+        return f"[{publisher} 등 다수]"
     return f"[{publisher}]"
 
 
@@ -82,7 +82,7 @@ def format_no_important() -> str:
     return "키워드 관련 주요 기사가 없습니다."
 
 
-def format_skipped_articles(skipped: list[dict]) -> list[str]:
+def format_skipped_articles(skipped: list[dict], haiku_filtered: int = 0) -> list[str]:
     """스킵된 기사들을 제목+링크로 모아 메시지 목록으로 포맷팅한다.
 
     topic_cluster 기준으로 중복을 제거하여 동일 주제는 1건만 표시한다.
@@ -98,7 +98,10 @@ def format_skipped_articles(skipped: list[dict]) -> list[str]:
             seen_clusters.add(cluster)
         deduped.append(article)
 
-    header = f"<b>스킵 {len(deduped)}건</b>"
+    if haiku_filtered > 0:
+        header = f"<b>스킵 {len(deduped)}건</b> (사진/광고 기사 필터링 {haiku_filtered}건 외)"
+    else:
+        header = f"<b>스킵 {len(deduped)}건</b>"
     item_lines = []
     for article in deduped:
         publisher = html_module.escape(article.get("publisher", ""))

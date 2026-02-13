@@ -16,7 +16,7 @@ from src.config import (
 from src.tools.search import search_news
 from src.tools.scraper import fetch_articles_batch
 from src.filters.publisher import filter_by_publisher, get_publisher_name
-from src.agents.check_agent import analyze_articles
+from src.agents.check_agent import analyze_articles, filter_check_articles
 from src.agents.report_agent import filter_articles, analyze_report_articles
 from src.storage import repository as repo
 from src.bot.formatters import (
@@ -35,11 +35,11 @@ _user_locks: dict[str, asyncio.Lock] = {}
 _pipeline_semaphore = asyncio.Semaphore(5)
 
 
-async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, datetime, datetime]:
+async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, datetime, datetime, int]:
     """네이버 검색 → 필터 → 본문 수집 → Claude 분석 파이프라인.
 
     Returns:
-        (분석 결과 리스트, since, now). 기사가 없으면 결과는 None.
+        (분석 결과 리스트, since, now, haiku_filtered). 기사가 없으면 결과는 None.
     """
     now = datetime.now(UTC)
     last_check = journalist["last_check_at"]
@@ -50,15 +50,15 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
         window_seconds = CHECK_MAX_WINDOW_SECONDS
     since = now - timedelta(seconds=window_seconds)
 
-    # 네이버 뉴스 수집
-    raw_articles = await search_news(journalist["keywords"], since)
+    # 네이버 뉴스 수집 (Haiku 필터가 노이즈를 걸러주므로 400건까지 확대)
+    raw_articles = await search_news(journalist["keywords"], since, max_results=300)
     if not raw_articles:
-        return None, since, now
+        return None, since, now, 0
 
     # 언론사 필터링
     filtered = filter_by_publisher(raw_articles)
     if not filtered:
-        return None, since, now
+        return None, since, now, 0
 
     # 제목 기반 필터링 (분석 가치 없는 기사 제거)
     _SKIP_TITLE_TAGS = {"[포토]", "[사진]", "[영상]", "[동영상]", "[화보]", "[카드뉴스]", "[인포그래픽]"}
@@ -67,9 +67,19 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
         if not any(tag in a.get("title", "") for tag in _SKIP_TITLE_TAGS)
     ]
     if not filtered:
-        return None, since, now
+        return None, since, now, 0
 
-    # 본문 수집 (첫 3문단)
+    # Haiku 사전 필터 (키워드 관련성)
+    pre_filter_count = len(filtered)
+    filtered = await filter_check_articles(
+        journalist["api_key"], filtered,
+        journalist["keywords"], journalist["department"],
+    )
+    haiku_filtered = pre_filter_count - len(filtered)
+    if not filtered:
+        return None, since, now, haiku_filtered
+
+    # 본문 수집 (Haiku 통과 기사만 스크래핑)
     urls = [a["link"] for a in filtered]
     bodies = await fetch_articles_batch(urls)
 
@@ -120,7 +130,7 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
                 r.setdefault("publisher", "")
                 r.setdefault("pub_time", "")
 
-    return results, since, now
+    return results, since, now, haiku_filtered
 
 
 async def _run_report_pipeline(
@@ -148,7 +158,7 @@ async def _run_report_pipeline(
         return None
 
     # 네이버 API 수집 (report는 400건 상한)
-    raw_articles = await search_news(report_keywords, since, max_results=400)
+    raw_articles = await search_news(report_keywords, since, max_results=300)
     if not raw_articles:
         return None
 
@@ -240,7 +250,7 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         async with _pipeline_semaphore:
             try:
-                results, since, now = await _run_check_pipeline(db, journalist)
+                results, since, now, haiku_filtered = await _run_check_pipeline(db, journalist)
             except Exception as e:
                 logger.error("타사 체크 실패: %s", e, exc_info=True)
                 await update.message.reply_text(f"타사 체크 중 오류가 발생했습니다: {e}")
@@ -259,7 +269,7 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         await repo.save_reported_articles(db, journalist["id"], results)
 
-        total = len(results)
+        total = len(results) + haiku_filtered
         important = len(reported)
         await update.message.reply_text(
             format_check_header(total, important, since, now), parse_mode="HTML",
@@ -272,7 +282,7 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
 
         if skipped:
-            for msg in format_skipped_articles(skipped):
+            for msg in format_skipped_articles(skipped, haiku_filtered):
                 await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
 
 
