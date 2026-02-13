@@ -272,9 +272,8 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
 
         if skipped:
-            await update.message.reply_text(
-                format_skipped_articles(skipped), parse_mode="HTML", disable_web_page_preview=True,
-            )
+            for msg in format_skipped_articles(skipped):
+                await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
 
 
 async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -434,10 +433,8 @@ async def _handle_report_scenario_b(
 
     # 기보고 항목: 토글 메시지로 모아 전송
     if unchanged:
-        await send_fn(
-            format_unchanged_report_items(unchanged),
-            parse_mode="HTML", disable_web_page_preview=True,
-        )
+        for msg in format_unchanged_report_items(unchanged):
+            await send_fn(msg, parse_mode="HTML", disable_web_page_preview=True)
 
 
 async def set_division_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

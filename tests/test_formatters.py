@@ -188,3 +188,98 @@ def test_format_report_item_scenario_b():
     }, scenario_b=True)
     assert "[수정]" in msg
     assert "수정 기사" in msg
+
+
+# --- 메시지 분할 ---
+
+from src.bot.formatters import format_skipped_articles, format_unchanged_report_items
+
+
+def test_format_skipped_articles_returns_list():
+    """반환 타입이 list[str]이다."""
+    skipped = [{"title": "기사1", "publisher": "A", "url": "https://ex.com/1", "reason": "사유"}]
+    result = format_skipped_articles(skipped)
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert "<blockquote expandable>" in result[0]
+    assert "스킵 1건" in result[0]
+
+
+def test_format_skipped_articles_dedup():
+    """topic_cluster 기준 중복 제거."""
+    skipped = [
+        {"title": "기사1", "publisher": "A", "url": "", "topic_cluster": "사건X"},
+        {"title": "기사2", "publisher": "B", "url": "", "topic_cluster": "사건X"},
+        {"title": "기사3", "publisher": "C", "url": "", "topic_cluster": "사건Y"},
+    ]
+    result = format_skipped_articles(skipped)
+    full = "\n".join(result)
+    assert "스킵 2건" in full
+    assert "기사1" in full
+    assert "기사2" not in full
+    assert "기사3" in full
+
+
+def test_format_skipped_articles_split_on_overflow():
+    """4096자 초과 시 여러 메시지로 분할된다."""
+    # 긴 제목 + URL로 항목당 ~200자 → 30건이면 ~6000자 → 분할 필요
+    skipped = [
+        {
+            "title": f"매우 긴 제목 기사 번호 {i} {'가' * 50}",
+            "publisher": "테스트언론사",
+            "url": f"https://news.naver.com/article/very-long-path-segment-{i}",
+            "reason": f"사유 {i}번 입니다",
+            "topic_cluster": f"주제{i}",
+        }
+        for i in range(30)
+    ]
+    result = format_skipped_articles(skipped)
+    assert len(result) >= 2, f"분할되어야 하지만 {len(result)}개 메시지"
+    for msg in result:
+        assert len(msg) <= 4096, f"메시지 길이 초과: {len(msg)}"
+        assert "</blockquote>" in msg  # HTML 태그 정상 닫힘
+    # 첫 메시지에만 헤더
+    assert "스킵" in result[0]
+
+
+def test_format_skipped_articles_all_messages_valid_html():
+    """분할된 모든 메시지의 blockquote 태그가 정상 닫힌다."""
+    skipped = [
+        {
+            "title": f"기사{i}",
+            "publisher": "언론",
+            "url": f"https://ex.com/{i}",
+            "reason": "사유" * 20,
+            "topic_cluster": f"t{i}",
+        }
+        for i in range(50)
+    ]
+    result = format_skipped_articles(skipped)
+    for msg in result:
+        assert msg.count("<blockquote expandable>") == msg.count("</blockquote>")
+
+
+def test_format_unchanged_report_items_returns_list():
+    """반환 타입이 list[str]이다."""
+    items = [{"title": "기사1", "publisher": "A", "url": "https://ex.com/1"}]
+    result = format_unchanged_report_items(items)
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert "기보고 1건" in result[0]
+
+
+def test_format_unchanged_report_items_split():
+    """4096자 초과 시 분할된다."""
+    items = [
+        {
+            "title": f"기보고 기사 {i} {'나' * 60}",
+            "publisher": "테스트",
+            "url": f"https://news.naver.com/article/path-{i}",
+        }
+        for i in range(40)
+    ]
+    result = format_unchanged_report_items(items)
+    assert len(result) >= 2
+    for msg in result:
+        assert len(msg) <= 4096
+        assert "</blockquote>" in msg

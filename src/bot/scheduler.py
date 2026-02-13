@@ -85,11 +85,8 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
                 disable_web_page_preview=True,
             )
         if skipped:
-            await send_fn(
-                format_skipped_articles(skipped),
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
+            for msg in format_skipped_articles(skipped):
+                await send_fn(msg, parse_mode="HTML", disable_web_page_preview=True)
 
 
 async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -82,10 +82,11 @@ def format_no_important() -> str:
     return "키워드 관련 주요 기사가 없습니다."
 
 
-def format_skipped_articles(skipped: list[dict]) -> str:
-    """스킵된 기사들을 제목+링크로 모아 하나의 메시지로 포맷팅한다.
+def format_skipped_articles(skipped: list[dict]) -> list[str]:
+    """스킵된 기사들을 제목+링크로 모아 메시지 목록으로 포맷팅한다.
 
     topic_cluster 기준으로 중복을 제거하여 동일 주제는 1건만 표시한다.
+    4096자 초과 시 여러 메시지로 분할하여 HTML 태그가 깨지지 않도록 한다.
     """
     seen_clusters: set[str] = set()
     deduped: list[dict] = []
@@ -116,11 +117,43 @@ def format_skipped_articles(skipped: list[dict]) -> str:
             item_lines.append(f"- {link} → {reason}")
         else:
             item_lines.append(f"- {link}")
-    body = "\n".join(item_lines)
-    return _truncate(f"{header}\n<blockquote expandable>{body}</blockquote>")
+    return _split_blockquote_messages(header, item_lines)
 
 
 # --- /report 포맷 ---
+
+def _split_blockquote_messages(header: str, item_lines: list[str]) -> list[str]:
+    """header + blockquote expandable 메시지를 4096자 이내로 분할한다.
+
+    첫 메시지에 header를 포함하고, 이후 메시지는 blockquote만 사용한다.
+    """
+    bq_open = "<blockquote expandable>"
+    bq_close = "</blockquote>"
+
+    messages: list[str] = []
+    current_lines: list[str] = []
+    is_first = True
+
+    for line in item_lines:
+        prefix = f"{header}\n{bq_open}" if is_first else bq_open
+        test_body = "\n".join(current_lines + [line])
+        if len(prefix) + len(test_body) + len(bq_close) > _MAX_MSG_LEN and current_lines:
+            # 현재까지 축적된 항목을 메시지로 확정
+            body = "\n".join(current_lines)
+            messages.append(f"{prefix}{body}{bq_close}")
+            current_lines = [line]
+            is_first = False
+        else:
+            current_lines.append(line)
+
+    # 남은 항목
+    if current_lines:
+        prefix = f"{header}\n{bq_open}" if is_first else bq_open
+        body = "\n".join(current_lines)
+        messages.append(f"{prefix}{body}{bq_close}")
+
+    return messages
+
 
 def _truncate(msg: str) -> str:
     if len(msg) > _MAX_MSG_LEN:
@@ -207,8 +240,11 @@ def format_report_item(item: dict, scenario_b: bool = False) -> str:
     return _truncate("\n".join(lines))
 
 
-def format_unchanged_report_items(items: list[dict]) -> str:
-    """기보고 항목들을 제목+링크로 모아 하나의 토글 메시지로 포맷팅한다."""
+def format_unchanged_report_items(items: list[dict]) -> list[str]:
+    """기보고 항목들을 제목+링크로 모아 토글 메시지 목록으로 포맷팅한다.
+
+    4096자 초과 시 여러 메시지로 분할한다.
+    """
     header = f"<b>기보고 {len(items)}건</b>"
     item_lines = []
     for item in items:
@@ -224,7 +260,6 @@ def format_unchanged_report_items(items: list[dict]) -> str:
             display += f" ({pub_time})"
         link = f'<a href="{html_module.escape(url)}">{display}</a>' if url else display
         item_lines.append(f"- {link}")
-    body = "\n".join(item_lines)
-    return _truncate(f"{header}\n<blockquote expandable>{body}</blockquote>")
+    return _split_blockquote_messages(header, item_lines)
 
 
