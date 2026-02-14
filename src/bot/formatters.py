@@ -22,11 +22,16 @@ def _publisher_label(publisher: str, source_count: int) -> str:
 
 def format_check_header(total: int, important: int, since: "datetime", now: "datetime") -> str:
     """헤더 메시지 (HTML). since~now 검색 범위를 표시한다."""
-    since_kst = since.astimezone(_KST).strftime("%Y-%m-%d %H:%M")
-    now_kst = now.astimezone(_KST).strftime("%Y-%m-%d %H:%M")
+    since_kst = since.astimezone(_KST)
+    now_kst = now.astimezone(_KST)
+    # 같은 날이면 시각만, 다른 날이면 날짜+시각
+    if since_kst.date() == now_kst.date():
+        time_range = f"{since_kst.strftime('%H:%M')} ~ {now_kst.strftime('%H:%M')}"
+    else:
+        time_range = f"{since_kst.strftime('%Y-%m-%d %H:%M')} ~ {now_kst.strftime('%Y-%m-%d %H:%M')}"
     return (
-        f"<b>타사 체크</b> ({since_kst} ~ {now_kst})\n"
-        f"주요 <b>{important}</b>건 (전체 {total}건 중)"
+        f"🔍 <b>타사 체크</b> ({time_range})\n"
+        f"주요 <b>{important}</b>건 / 전체 {total}건"
     )
 
 
@@ -172,7 +177,10 @@ def _dept_label(department: str) -> str:
 def format_report_header_a(department: str, date: str, count: int) -> str:
     """시나리오 A 헤더: 당일 첫 요청."""
     label = _dept_label(department)
-    return f"<b>{label} 주요 뉴스</b> ({date}) - 총 <b>{count}</b>건"
+    return (
+        f"📋 <b>{label} 주요 뉴스</b> ({date})\n"
+        f"주요 <b>{count}</b>건"
+    )
 
 
 def format_report_header_b(department: str, date: str, total: int, modified: int, added: int) -> str:
@@ -185,8 +193,14 @@ def format_report_header_b(department: str, date: str, total: int, modified: int
         if added > 0:
             parts.append(f"추가 {added}건")
         change_str = ", ".join(parts)
-        return f"<b>{label} 주요 뉴스</b> ({date}) - 총 <b>{total}</b>건 ({change_str})"
-    return f"<b>{label} 주요 뉴스</b> ({date}) - 총 <b>{total}</b>건 (변경 없음)"
+        return (
+            f"📋 <b>{label} 주요 뉴스</b> ({date})\n"
+            f"총 <b>{total}</b>건 ({change_str})"
+        )
+    return (
+        f"📋 <b>{label} 주요 뉴스</b> ({date})\n"
+        f"총 <b>{total}</b>건 (변경 없음)"
+    )
 
 
 def format_report_item(item: dict, scenario_b: bool = False) -> str:

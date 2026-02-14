@@ -50,8 +50,7 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
 
     async with lock:
-        now_kst = datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
-        await send_fn(f"─────\nschedule 자동 실행 ({now_kst})")
+        await send_fn("━━━━━━━━━━━━━━━━━━━━\n🔍 자동 타사체크\n━━━━━━━━━━━━━━━━━━━━")
 
         async with _pipeline_semaphore:
             try:
@@ -110,8 +109,7 @@ async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
 
     async with lock:
-        now_kst = datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
-        await send_fn(f"─────\nschedule 자동 실행 ({now_kst})")
+        await send_fn("━━━━━━━━━━━━━━━━━━━━\n📋 자동 브리핑\n━━━━━━━━━━━━━━━━━━━━")
 
         today = datetime.now(_KST).strftime("%Y-%m-%d")
         department = journalist["department"]
