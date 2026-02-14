@@ -123,6 +123,7 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
                 src = articles_for_analysis[valid_sources[0] - 1]
                 r["url"] = src["url"]
                 r["publisher"] = src["publisher"]
+                r["title"] = src["title"]  # 원본 기사 제목 강제
                 pub_date = src.get("pubDate", "")
                 r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
             else:
@@ -207,9 +208,18 @@ async def _run_report_pipeline(
         department=department,
     )
 
-    # source_indices → URL, 언론사, 배포시각 역매핑
+    # source_indices → URL, 언론사, 배포시각, 원본 제목 역매핑
     if results:
         n = len(articles_for_analysis)
+        # 순번→DB ID 매핑 (시나리오 B)
+        if existing_items:
+            seq_to_db_id = {
+                seq: item["id"]
+                for seq, item in enumerate(existing_items, 1)
+            }
+        else:
+            seq_to_db_id = {}
+
         for r in results:
             source_indices = r.pop("source_indices", [])
             valid_sources = [i for i in source_indices if 1 <= i <= n]
@@ -218,12 +228,17 @@ async def _run_report_pipeline(
                 src = articles_for_analysis[valid_sources[0] - 1]
                 r["url"] = src["link"]
                 r["publisher"] = src["publisher"]
+                r["title"] = src["title"]  # 원본 기사 제목 강제
                 pub_date = src.get("pubDate", "")
                 r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
             else:
                 r.setdefault("url", "")
                 r.setdefault("publisher", "")
                 r.setdefault("pub_time", "")
+
+            # 순번→DB ID 변환 (시나리오 B modified)
+            if r.get("item_id") and seq_to_db_id:
+                r["item_id"] = seq_to_db_id.get(r["item_id"], r["item_id"])
 
     return results
 

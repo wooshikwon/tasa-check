@@ -143,11 +143,11 @@ _REPORT_TOOL = {
                         },
                         "item_id": {
                             "type": ["integer", "null"],
-                            "description": "기존 항목 ID (action=modified일 때만)",
+                            "description": "기존 항목 순번 (action=modified일 때만, 항목1=1, 항목2=2)",
                         },
                         "title": {
                             "type": "string",
-                            "description": "기사 제목",
+                            "description": "대표 기사의 원본 제목 (수집된 기사 목록의 제목을 그대로 사용)",
                         },
                         "source_indices": {
                             "type": "array",
@@ -280,42 +280,43 @@ def _build_system_prompt(
     sections.append(
         "[동일 사안 병합/분리 규칙]\n"
         "- 동일 사안의 복수 보도는 source_indices로 묶어 1건으로 보고\n"
-        "- 단, 단독 보도나 새로운 팩트가 있는 기사는 별도 항목으로 분리\n"
+        "- 단독 보도([단독] 또는 '취재에 따르면')만 별도 항목으로 분리\n"
         "  예) 'A 사건' 일반 보도 3건 → 1건으로 병합 (source_indices: [1, 2, 3])\n"
-        "  예) 'A 사건' 일반 보도 3건 + [단독] 새 팩트 1건 → 2건으로 분리"
+        "  예) 'A 사건' 일반 보도 3건 + [단독] 1건 → 2건으로 분리"
     )
 
     # 중복/후속 판단 기준
     sections.append(
         "[중복/후속 판단 기준]\n"
+        "동일 뉴스 판단: 육하원칙(누가, 언제, 어디서, 무엇을)의 핵심 사실이 동일하면 동일 뉴스다.\n"
+        "같은 발표·발언·사건의 추가 수치·반응·배경·디테일은 새 뉴스가 아니다.\n\n"
         "- new: 이전 보고 이력에 없는 새로운 사안\n"
         "- follow_up: 이전 보고된 사안이면서 [단독] 또는 \"취재에 따르면\" 패턴이 있는 단독 기사만 허용\n"
-        "- 이전 보고된 사안의 추가 디테일(수치, 반응, 후속 보도 등)은 follow_up이 아니다 → 선정 불가\n"
+        "- 그 외 이전 보고된 사안의 기사는 전부 선정 불가\n"
         "- reason에 \"새로운 사실 없음\" 등을 적으면서 results에 포함시키는 것은 모순이다\n"
         "- key_facts에는 당일 새로 발생/확인된 팩트만 기록. 기사 내 과거 경위는 넣지 않는다"
     )
 
     # 시나리오별 출력 규칙
     if is_scenario_b:
-        lines = ["[오늘 기존 캐시]"]
-        for item in existing_items:
+        lines = ["[오늘 기존 항목]"]
+        for seq, item in enumerate(existing_items, 1):
             facts = item.get("key_facts", [])
             facts_str = ", ".join(facts) if facts else "없음"
             lines.append(
-                f"- id:{item['id']} | {item['title']} | 요약: {item['summary']} "
+                f"- 항목{seq} | {item['title']} | 요약: {item['summary']} "
                 f"| key_facts: [{facts_str}]"
             )
         sections.append("\n".join(lines))
 
         sections.append(
             "[출력 규칙 - 업데이트]\n"
-            "수집된 기사를 기존 캐시와 비교하여 변경/추가 사항만 보고한다.\n"
-            "- 기존 항목에 새 팩트가 추가됐으면 action: \"modified\" (기존 요약에 새 정보 병합)\n"
-            "- 기존 캐시에 없는 새로운 사안이면 action: \"added\"\n"
-            "- modified 항목은 item_id를 반드시 기재\n"
-            "- 기존 캐시에 없는 새로운 사안도 빠짐없이 검토한다\n\n"
+            "수집된 기사를 기존 항목과 비교하여 변경/추가 사항만 보고한다.\n"
+            "- 기존 항목의 사안에 대해 단독 기사([단독] 또는 '취재에 따르면')가 새로 발견됐을 때만 action: \"modified\"\n"
+            "- 기존 항목과 육하원칙이 동일한 기사는 추가 디테일이 있어도 results에 넣지 않는다\n"
+            "- 기존 항목에 없는 새로운 사안이면 action: \"added\"\n"
+            "- modified 항목은 item_id를 반드시 기재\n\n"
             "중요: results 배열에는 [제외 기준]을 통과한 항목만 포함한다.\n"
-            "- 기존 캐시와 동일한 사안인데 새로운 팩트가 없는 기사 → results에 넣지 않는다\n"
             "- 제외 대상을 reason에 \"제외\"라고 적어 넣는 것은 잘못된 응답이다\n"
             "- 수정/추가 항목이 없으면 빈 배열을 제출\n"
             "submit_report 도구의 results 배열로 제출하라."
@@ -370,15 +371,15 @@ def _build_user_prompt(
             "이력 없음. 모든 항목을 category: \"new\", prev_reference: null로 설정하라."
         )
 
-    # 시나리오 B: 기존 캐시
+    # 시나리오 B: 기존 항목
     is_scenario_b = existing_items is not None and len(existing_items) > 0
     if is_scenario_b:
-        lines = ["[오늘 기존 캐시 항목]"]
-        for item in existing_items:
+        lines = ["[오늘 기존 항목]"]
+        for seq, item in enumerate(existing_items, 1):
             facts = item.get("key_facts", [])
             facts_str = ", ".join(facts) if facts else "없음"
             lines.append(
-                f"- id:{item['id']} | {item['title']} | 요약: {item['summary']} "
+                f"- 항목{seq} | {item['title']} | 요약: {item['summary']} "
                 f"| key_facts: [{facts_str}]"
             )
         sections.append("\n".join(lines))
