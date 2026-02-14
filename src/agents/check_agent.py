@@ -97,7 +97,7 @@ async def filter_check_articles(
         as_type="span", name="check_filter",
         metadata={"department": department, "input_count": len(articles)},
     ):
-        client = anthropic.AsyncAnthropic(api_key=api_key)
+        client = anthropic.AsyncAnthropic(api_key=api_key, max_retries=3)
         message = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=2048,
@@ -463,7 +463,7 @@ async def analyze_articles(
             as_type="span", name="check_agent",
             metadata={"department": department, "attempt": attempt + 1},
         ):
-            client = anthropic.AsyncAnthropic(api_key=api_key)
+            client = anthropic.AsyncAnthropic(api_key=api_key, max_retries=3)
             message = await client.messages.create(
                 model="claude-sonnet-4-5-20250929",
                 max_tokens=16384,

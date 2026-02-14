@@ -15,6 +15,7 @@ from src.bot.handlers import (
     _pipeline_semaphore,
     _handle_report_scenario_a,
     _handle_report_scenario_b,
+    format_error_message,
 )
 from src.bot.formatters import (
     format_check_header,
@@ -57,7 +58,7 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
                 results, since, now, haiku_filtered = await _run_check_pipeline(db, journalist)
             except Exception as e:
                 logger.error("자동 check 실패 (journalist=%d): %s", journalist_id, e, exc_info=True)
-                await send_fn(f"[자동 체크] 오류: {e}")
+                await send_fn(f"[자동 체크] 실패: {format_error_message(e)}")
                 return
 
         # check 실행 완료 시점에 항상 last_check_at 갱신
@@ -128,7 +129,7 @@ async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
             except Exception as e:
                 logger.error("자동 report 실패 (journalist=%d): %s", journalist_id, e, exc_info=True)
-                await send_fn(f"[자동 브리핑] 오류: {e}")
+                await send_fn(f"[자동 브리핑] 실패: {format_error_message(e)}")
                 return
 
         # report 실행 완료 시점에 항상 last_report_at 갱신

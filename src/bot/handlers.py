@@ -4,6 +4,8 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta, timezone
 
+import anthropic
+
 _KST = timezone(timedelta(hours=9))
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -27,6 +29,27 @@ from src.bot.formatters import (
 )
 
 logger = logging.getLogger(__name__)
+
+def format_error_message(e: Exception) -> str:
+    """예외를 사용자 친화적 한국어 메시지로 변환한다."""
+    if isinstance(e, anthropic.APIStatusError):
+        code = e.status_code
+        if code == 529:
+            return "Anthropic 서버 과부하로 요청 실패. 잠시 후 자동 재시도됩니다."
+        if code == 429:
+            return "API 요청 한도 초과. 잠시 후 다시 시도해주세요."
+        if code == 401:
+            return "API 키가 유효하지 않습니다. /set_apikey로 재설정해주세요."
+        if code >= 500:
+            return f"Anthropic 서버 오류({code}). 잠시 후 다시 시도해주세요."
+    if isinstance(e, anthropic.APIConnectionError):
+        return "Anthropic 서버 연결 실패. 네트워크 상태를 확인해주세요."
+    if isinstance(e, anthropic.APITimeoutError):
+        return "Anthropic 서버 응답 시간 초과. 잠시 후 다시 시도해주세요."
+    if isinstance(e, RuntimeError):
+        return str(e)
+    return f"예상치 못한 오류: {type(e).__name__}"
+
 
 # 사용자별 동시 실행 방지 잠금
 _user_locks: dict[str, asyncio.Lock] = {}
@@ -268,7 +291,7 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 results, since, now, haiku_filtered = await _run_check_pipeline(db, journalist)
             except Exception as e:
                 logger.error("타사 체크 실패: %s", e, exc_info=True)
-                await update.message.reply_text(f"타사 체크 중 오류가 발생했습니다: {e}")
+                await update.message.reply_text(f"타사 체크 실패: {format_error_message(e)}")
                 return
 
         # check 실행 완료 시점에 항상 last_check_at 갱신
@@ -341,7 +364,7 @@ async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 )
             except Exception as e:
                 logger.error("report 파이프라인 실패: %s", e, exc_info=True)
-                await update.message.reply_text(f"브리핑 생성 중 오류가 발생했습니다: {e}")
+                await update.message.reply_text(f"브리핑 생성 실패: {format_error_message(e)}")
                 return
 
         # report 실행 완료 시점에 항상 last_report_at 갱신
