@@ -2,7 +2,7 @@
 
 수집된 기사 목록을 Claude API로 분석하여
 [단독]/[주요]/[스킵]을 분류하고, 요약과 판단 근거를 생성한다.
-Haiku 사전 필터로 키워드 무관 기사를 제거한 뒤 Sonnet으로 분석한다.
+Haiku 사전 필터로 키워드 무관 기사를 제거한 뒤 Haiku로 분석한다.
 """
 
 import json
@@ -435,7 +435,7 @@ async def analyze_articles(
     department: str,
     keywords: list[str] | None = None,
 ) -> list[dict]:
-    """Claude API로 기사를 분석한다 (tool_use 방식, 파싱 실패 시 최대 2회 재시도).
+    """Claude API로 기사를 분석한다 (tool_use 방식, 파싱 실패 시 최대 4회 재시도).
 
     Args:
         api_key: 기자의 Anthropic API 키
@@ -448,16 +448,16 @@ async def analyze_articles(
         분석 결과 리스트 (주요 + 스킵 병합).
 
     Raises:
-        RuntimeError: 3회 시도 후에도 파싱 실패 시
+        RuntimeError: 5회 시도 후에도 파싱 실패 시
     """
     system_prompt = _build_system_prompt(keywords or [], department)
     user_prompt = _build_user_prompt(articles, history, department)
 
     langfuse = get_langfuse()
 
-    for attempt in range(3):
-        # 재시도 시 temperature를 올려 동일 실패 패턴 회피
-        temperature = 0.0 if attempt == 0 else 0.2
+    for attempt in range(5):
+        # 재시도마다 temperature를 0.1씩 올려 동일 실패 패턴 회피
+        temperature = round(attempt * 0.1, 1)
 
         with langfuse.start_as_current_observation(
             as_type="span", name="check_agent",
@@ -465,7 +465,7 @@ async def analyze_articles(
         ):
             client = anthropic.AsyncAnthropic(api_key=api_key, max_retries=3)
             message = await client.messages.create(
-                model="claude-sonnet-4-5-20250929",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=16384,
                 temperature=temperature,
                 system=system_prompt,
@@ -484,13 +484,13 @@ async def analyze_articles(
         if parsed is not None:
             # 기사가 제공됐는데 빈 결과 → 이상 응답 (모든 기사는 분류되어야 함)
             if not parsed:
-                if attempt < 2:
+                if attempt < 4:
                     logger.warning("빈 결과 반환 (기사 %d건, attempt %d), 재시도", len(articles), attempt + 1)
                     continue
-                raise RuntimeError("분석 결과 빈 배열 (3회 시도)")
+                raise RuntimeError("분석 결과 빈 배열 (5회 시도)")
             return parsed
 
-        if attempt < 2:
+        if attempt < 4:
             logger.warning("파싱 실패 (attempt %d), 재시도", attempt + 1)
 
-    raise RuntimeError("분석 응답 파싱 실패 (3회 시도)")
+    raise RuntimeError("분석 응답 파싱 실패 (5회 시도)")

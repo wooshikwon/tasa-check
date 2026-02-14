@@ -446,7 +446,7 @@ async def analyze_report_articles(
     existing_items: list[dict] | None,
     department: str,
 ) -> list[dict]:
-    """Claude API로 기사를 분석하여 브리핑을 생성한다 (tool_use 방식, 파싱 실패 시 최대 2회 재시도).
+    """Claude API로 기사를 분석하여 브리핑을 생성한다 (tool_use 방식, 파싱 실패 시 최대 4회 재시도).
 
     Args:
         api_key: Anthropic API 키
@@ -459,7 +459,7 @@ async def analyze_report_articles(
         브리핑 항목 리스트. 빈 배열은 유효 (중요 기사 없음 또는 변경 없음).
 
     Raises:
-        RuntimeError: 3회 시도 후에도 파싱 실패 시
+        RuntimeError: 5회 시도 후에도 파싱 실패 시
     """
     system_prompt = _build_system_prompt(department, existing_items)
     user_prompt = _build_user_prompt(articles, report_history, existing_items)
@@ -469,9 +469,9 @@ async def analyze_report_articles(
 
     langfuse = get_langfuse()
 
-    for attempt in range(3):
-        # 재시도 시 temperature를 올려 동일 실패 패턴 회피
-        temperature = 0.0 if attempt == 0 else 0.2
+    for attempt in range(5):
+        # 재시도마다 temperature를 0.1씩 올려 동일 실패 패턴 회피
+        temperature = round(attempt * 0.1, 1)
 
         with langfuse.start_as_current_observation(
             as_type="span", name="report_agent",
@@ -479,7 +479,7 @@ async def analyze_report_articles(
         ):
             client = anthropic.AsyncAnthropic(api_key=api_key, max_retries=3)
             message = await client.messages.create(
-                model="claude-sonnet-4-5-20250929",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=16384,
                 temperature=temperature,
                 system=system_prompt,
@@ -498,7 +498,7 @@ async def analyze_report_articles(
         if parsed is not None:
             return parsed
 
-        if attempt < 2:
+        if attempt < 4:
             logger.warning("파싱 실패 (attempt %d), 재시도", attempt + 1)
 
-    raise RuntimeError("브리핑 응답 파싱 실패 (3회 시도)")
+    raise RuntimeError("브리핑 응답 파싱 실패 (5회 시도)")

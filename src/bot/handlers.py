@@ -35,7 +35,7 @@ def format_error_message(e: Exception) -> str:
     if isinstance(e, anthropic.APIStatusError):
         code = e.status_code
         if code == 529:
-            return "Anthropic 서버 과부하로 요청 실패 (3회 재시도 모두 실패). 잠시 후 다시 시도해주세요."
+            return "Anthropic 서버 과부하로 요청 실패 (5회 재시도 모두 실패). 잠시 후 다시 시도해주세요."
         if code == 429:
             return "API 요청 한도 초과. 잠시 후 다시 시도해주세요."
         if code == 401:
