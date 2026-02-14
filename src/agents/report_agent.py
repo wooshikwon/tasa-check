@@ -479,7 +479,7 @@ async def analyze_report_articles(
         ):
             client = anthropic.AsyncAnthropic(api_key=api_key, max_retries=3)
             message = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-sonnet-4-5-20250929",
                 max_tokens=16384,
                 temperature=temperature,
                 system=system_prompt,
