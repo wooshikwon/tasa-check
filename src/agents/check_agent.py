@@ -5,6 +5,7 @@
 Haiku 사전 필터로 키워드 무관 기사를 제거한 뒤 Sonnet으로 분석한다.
 """
 
+import json
 import logging
 from datetime import datetime, timezone, timedelta
 
@@ -381,6 +382,18 @@ def _build_system_prompt(keywords: list[str], department: str) -> str:
     )
 
 
+def _try_parse_json_field(raw, field_name: str):
+    """tool_use 응답 필드가 문자열인 경우 JSON 파싱을 시도한다."""
+    if isinstance(raw, str):
+        logger.warning("%s가 문자열로 반환됨 (%d chars), JSON 파싱 시도", field_name, len(raw))
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            logger.error("%s JSON 파싱 실패", field_name)
+            return None
+    return raw
+
+
 def _parse_analysis_response(message) -> list[dict] | None:
     """tool_use 응답에서 분석 결과를 추출한다. 파싱 실패 시 None."""
     for block in message.content:
@@ -388,16 +401,21 @@ def _parse_analysis_response(message) -> list[dict] | None:
             raw_input = block.input
             raw_results = raw_input.get("results", [])
             raw_skipped = raw_input.get("skipped", [])
-            results = [r for r in raw_results if isinstance(r, dict)]
-            skipped = [s for s in raw_skipped if isinstance(s, dict)]
-            if len(results) != len(raw_results) or len(skipped) != len(raw_skipped):
+            # LLM이 배열을 JSON 문자열로 반환하는 경우 파싱
+            parsed_results = _try_parse_json_field(raw_results, "results")
+            parsed_skipped = _try_parse_json_field(raw_skipped, "skipped")
+            if parsed_results is None or parsed_skipped is None:
+                return None
+            results = [r for r in parsed_results if isinstance(r, dict)]
+            skipped = [s for s in parsed_skipped if isinstance(s, dict)]
+            if len(results) != len(parsed_results) or len(skipped) != len(parsed_skipped):
                 logger.warning(
                     "타입 필터링 발생: results %d→%d, skipped %d→%d, raw_keys=%s",
-                    len(raw_results), len(results), len(raw_skipped), len(skipped),
+                    len(parsed_results), len(results), len(parsed_skipped), len(skipped),
                     list(raw_input.keys()),
                 )
             # 원본 데이터가 있는데 필터링 후 전부 소실 → 파싱 실패
-            if not results and not skipped and (raw_results or raw_skipped):
+            if not results and not skipped and (parsed_results or parsed_skipped):
                 return None
             if not results and not skipped:
                 logger.warning("빈 결과 반환됨, tool input keys=%s", list(raw_input.keys()))

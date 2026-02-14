@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html as html_module
 import logging
 import re
 from datetime import datetime
@@ -26,8 +27,8 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 def _strip_html(text: str) -> str:
-    """HTML 태그 제거."""
-    return _HTML_TAG_RE.sub("", text)
+    """HTML 태그 제거 + HTML 엔티티 디코딩."""
+    return html_module.unescape(_HTML_TAG_RE.sub("", text))
 
 
 def _parse_pub_date(raw: str) -> datetime:

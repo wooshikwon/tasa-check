@@ -56,22 +56,19 @@ def format_article_message(article: dict) -> str:
     source_count = article.get("source_count", 1)
 
     pub_label = _publisher_label(publisher, source_count)
-    title_line = f"{tag} {pub_label} {title}".strip()
+    title_line = f"● {tag} {pub_label} {title}".strip()
     if pub_time:
         title_line += f" ({pub_time})"
 
     if url:
         title_line = f'<a href="{html_module.escape(url)}">{title_line}</a>'
-    lines = [
-        f"<b>{title_line}</b>",
-        "",
-        summary,
-    ]
-    if reason:
-        lines.append("")
-        lines.append(f"-> <i>{reason}</i>")
 
-    msg = "\n".join(lines)
+    detail_lines = [summary]
+    if reason:
+        detail_lines.append(f"-> <i>{reason}</i>")
+    detail = "\n".join(detail_lines)
+
+    msg = f"<b>{title_line}</b>\n<blockquote expandable>{detail}</blockquote>"
     if len(msg) > _MAX_MSG_LEN:
         msg = msg[:_MAX_MSG_LEN - 3] + "..."
     return msg
@@ -237,24 +234,20 @@ def format_report_item(item: dict, scenario_b: bool = False) -> str:
     # 태그 + [언론사 등 N건] + 제목 + 시각
     pub_label = _publisher_label(publisher, source_count)
     title_part = f"{pub_label} {title}".strip() if pub_label else title
-    header = f"{tag} {title_part}".strip() if tag else title_part
+    header = f"■ {tag} {title_part}".strip() if tag else f"■ {title_part}"
     if pub_time:
         header += f" ({pub_time})"
     if url:
         header = f'<a href="{html_module.escape(url)}">{header}</a>'
-    lines = [
-        f"<b>{header}</b>",
-        "",
-        summary,
-    ]
-    if reason:
-        lines.append("")
-        lines.append(f"-> <i>{reason}</i>")
-    if prev_ref:
-        lines.append("")
-        lines.append(f"<i>(이전 전달: {html_module.escape(prev_ref)})</i>")
 
-    return _truncate("\n".join(lines))
+    detail_lines = [summary]
+    if reason:
+        detail_lines.append(f"-> <i>{reason}</i>")
+    if prev_ref:
+        detail_lines.append(f"<i>(이전 전달: {html_module.escape(prev_ref)})</i>")
+    detail = "\n".join(detail_lines)
+
+    return _truncate(f"<b>{header}</b>\n<blockquote expandable>{detail}</blockquote>")
 
 
 def format_unchanged_report_items(items: list[dict]) -> list[str]:

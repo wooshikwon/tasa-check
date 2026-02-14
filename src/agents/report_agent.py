@@ -4,6 +4,7 @@
 부서 관련 당일 뉴스를 선별, 분석, 구조화하여 반환한다.
 """
 
+import json
 import logging
 from datetime import timezone, timedelta
 
@@ -124,74 +125,87 @@ async def filter_articles(
 
 # ── 메인 분석 ────────────────────────────────────────────────
 
-_REPORT_TOOL = {
-    "name": "submit_report",
-    "description": "뉴스 브리핑 분석 결과를 제출한다.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "results": {
-                "type": "array",
-                "description": "브리핑 항목 배열",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "action": {
-                            "type": "string",
-                            "enum": ["modified", "added"],
-                            "description": "기존 캐시 대비 변경 유형 (업데이트 시나리오 전용)",
-                        },
-                        "item_id": {
-                            "type": ["integer", "null"],
-                            "description": "기존 항목 순번 (action=modified일 때만, 항목1=1, 항목2=2)",
-                        },
-                        "title": {
-                            "type": "string",
-                            "description": "대표 기사의 원본 제목 (수집된 기사 목록의 제목을 그대로 사용)",
-                        },
-                        "source_indices": {
-                            "type": "array",
-                            "items": {"type": "integer"},
-                            "description": "참조 기사 번호 배열 (수집된 기사 목록 기준)",
-                        },
-                        "summary": {
-                            "type": "string",
-                            "description": "2~3줄 구체적 요약 (인물명, 수치, 일시 등 팩트 포함)",
-                        },
-                        "reason": {
-                            "type": "string",
-                            "description": "선택 사유 1문장",
-                        },
-                        "category": {
-                            "type": "string",
-                            "enum": ["follow_up", "new"],
-                            "description": "follow_up=이전 보도 후속, new=신규",
-                        },
-                        "key_facts": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "이 기사의 핵심 팩트 배열 (예: [\"대표 소환\", \"회계장부 압수\"])",
-                        },
-                        "exclusive": {
-                            "type": "boolean",
-                            "description": "[단독] 태그 또는 특정 언론사만 보도한 기사이면 true",
-                        },
-                        "prev_reference": {
-                            "type": ["string", "null"],
-                            "description": "follow_up이면 'YYYY-MM-DD \"이전 제목\"', new이면 null",
-                        },
+def _build_report_tool(is_scenario_b: bool) -> dict:
+    """시나리오에 따라 도구 스키마를 동적으로 구성한다.
+
+    시나리오 A: action/item_id 필드 없음
+    시나리오 B: action/item_id 필드 추가 (required)
+    union type 사용하지 않음 — null 대신 빈값(0/"")으로 대체.
+    """
+    item_props = {
+        "title": {
+            "type": "string",
+            "description": "대표 기사의 원본 제목 (수집된 기사 목록의 제목을 그대로 사용)",
+        },
+        "source_indices": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "참조 기사 번호 배열 (수집된 기사 목록 기준)",
+        },
+        "summary": {
+            "type": "string",
+            "description": "2~3줄 육하원칙 스트레이트 형식 요약 (당일 팩트만)",
+        },
+        "reason": {
+            "type": "string",
+            "description": "선택 사유 1문장",
+        },
+        "category": {
+            "type": "string",
+            "enum": ["follow_up", "new"],
+            "description": "follow_up=이전 보도 단독 후속, new=신규 사안",
+        },
+        "key_facts": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "당일 새로 발생/확인된 핵심 팩트 배열",
+        },
+        "exclusive": {
+            "type": "boolean",
+            "description": "[단독] 태그 또는 특정 언론사만 보도한 기사이면 true",
+        },
+        "prev_reference": {
+            "type": "string",
+            "description": "follow_up이면 'YYYY-MM-DD \"이전 제목\"', new이면 빈 문자열",
+        },
+    }
+    required = [
+        "title", "source_indices", "summary",
+        "reason", "category", "key_facts",
+        "exclusive", "prev_reference",
+    ]
+
+    if is_scenario_b:
+        item_props["action"] = {
+            "type": "string",
+            "enum": ["modified", "added"],
+            "description": "modified=기존 항목에 단독 기사 발견, added=새로운 사안",
+        }
+        item_props["item_id"] = {
+            "type": "integer",
+            "description": "수정 대상 기존 항목 순번 (modified일 때 해당 순번, added일 때 0)",
+        }
+        required = ["action", "item_id"] + required
+
+    return {
+        "name": "submit_report",
+        "description": "뉴스 브리핑 분석 결과를 제출한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "description": "브리핑 항목 배열 (선정 기준 미달 시 빈 배열)",
+                    "items": {
+                        "type": "object",
+                        "properties": item_props,
+                        "required": required,
                     },
-                    "required": [
-                        "title", "source_indices", "summary",
-                        "reason", "category", "key_facts",
-                        "exclusive", "prev_reference",
-                    ],
                 },
             },
+            "required": ["results"],
         },
-        "required": ["results"],
-    },
-}
+    }
 
 
 def _build_system_prompt(
@@ -254,7 +268,7 @@ def _build_system_prompt(
     # 제외 기준
     sections.append(
         "[제외 기준]\n"
-        "아래에 해당하면 중요도와 무관하게 반드시 제외한다:\n"
+        "다음 유형의 기사는 results에 포함하지 않는다:\n"
         "- 단발성 사건·사고: 추락, 사망, 교통사고, 화재 등 후속 보도 가능성이 낮은 개별 사건\n"
         "- 정례적 발표: 정부 부처 보도자료, 정기 통계, 일상적 권고·캠페인\n"
         "- 단순 일정·예고: 행사 안내, 연휴 당부, 날씨 전망\n"
@@ -262,8 +276,8 @@ def _build_system_prompt(
         "- 인터뷰·칼럼·사설: 기자 의견, 전문가 인터뷰 단독 기사\n"
         "- 재탕·종합 보도: 이미 알려진 팩트를 재구성한 기사, 타 매체 인용 정리 기사\n"
         "- 연예·스포츠 가십: 부서 취재 영역과 무관한 연예인·선수 사생활\n\n"
-        "자기 검증: reason에 '후속 보도 가능성 낮음', '단발성', '단순 사건·사고' 등을 "
-        "적게 된다면 그 기사는 제외 대상이다. 제외 사유를 적으면서 results에 포함시키는 것은 모순이다."
+        "선정 전 자기 검증: reason을 먼저 작성하라. "
+        "reason이 위 제외 유형에 해당하면('후속 가능성 낮음', '단발성' 등) 해당 기사는 제외 대상이다."
     )
 
     # 요약 작성 기준
@@ -291,50 +305,36 @@ def _build_system_prompt(
         "[중복/후속 판단 기준]\n"
         "동일 뉴스 판단: 육하원칙(누가, 언제, 어디서, 무엇을)의 핵심 사실이 동일하면 동일 뉴스다.\n"
         "같은 발표·발언·사건의 추가 수치·반응·배경·디테일은 새 뉴스가 아니다.\n\n"
-        "- new: 이전 보고 이력에 없는 새로운 사안\n"
-        "- follow_up: 이전 보고된 사안이면서 [단독] 또는 \"취재에 따르면\" 패턴이 있는 단독 기사만 허용\n"
-        "- 그 외 이전 보고된 사안의 기사는 전부 선정 불가\n"
-        "- reason에 \"새로운 사실 없음\" 등을 적으면서 results에 포함시키는 것은 모순이다\n"
-        "- key_facts에는 당일 새로 발생/확인된 팩트만 기록. 기사 내 과거 경위는 넣지 않는다"
+        "- new: 이전 보고 이력에 없는 새로운 사안만 선정\n"
+        "- follow_up: 이전 보고된 사안 중 [단독] 또는 \"취재에 따르면\" 패턴이 있는 단독 기사만 선정 가능\n"
+        "- 위 두 조건에 해당하지 않는 이전 보고 사안은 선정하지 않는다\n"
+        "- key_facts에는 당일 새로 발생/확인된 팩트만 기록한다"
     )
 
-    # 시나리오별 출력 규칙
+    # 시나리오별 출력 규칙 (기존 항목은 유저 프롬프트에서만 제공)
     if is_scenario_b:
-        lines = ["[오늘 기존 항목]"]
-        for seq, item in enumerate(existing_items, 1):
-            facts = item.get("key_facts", [])
-            facts_str = ", ".join(facts) if facts else "없음"
-            lines.append(
-                f"- 항목{seq} | {item['title']} | 요약: {item['summary']} "
-                f"| key_facts: [{facts_str}]"
-            )
-        sections.append("\n".join(lines))
-
         sections.append(
             "[출력 규칙 - 업데이트]\n"
-            "수집된 기사를 기존 항목과 비교하여 변경/추가 사항만 보고한다.\n"
-            "- 기존 항목의 사안에 대해 단독 기사([단독] 또는 '취재에 따르면')가 새로 발견됐을 때만 action: \"modified\"\n"
-            "- 기존 항목과 육하원칙이 동일한 기사는 추가 디테일이 있어도 results에 넣지 않는다\n"
-            "- 기존 항목에 없는 새로운 사안이면 action: \"added\"\n"
-            "- modified 항목은 item_id를 반드시 기재\n\n"
-            "중요: results 배열에는 [제외 기준]을 통과한 항목만 포함한다.\n"
-            "- 제외 대상을 reason에 \"제외\"라고 적어 넣는 것은 잘못된 응답이다\n"
-            "- 수정/추가 항목이 없으면 빈 배열을 제출\n"
-            "submit_report 도구의 results 배열로 제출하라."
+            "수집된 기사를 유저 프롬프트의 [오늘 기존 항목]과 비교하여 변경/추가 사항만 보고한다.\n"
+            "- action: \"modified\" — 기존 항목의 사안에 단독 기사([단독] 또는 '취재에 따르면')가 새로 발견된 경우\n"
+            "- action: \"added\" — 기존 항목에 없는 새로운 사안\n"
+            "- 기존 항목과 육하원칙이 동일한 기사는 추가 디테일이 있어도 선정하지 않는다\n"
+            "- modified 항목은 item_id(기존 항목 순번)를 반드시 기재한다\n"
+            "- 수정/추가 항목이 없으면 빈 배열을 제출한다\n\n"
+            "results에는 [제외 기준]과 [중복/후속 판단 기준]을 모두 통과한 항목만 포함한다.\n"
+            "submit_report 도구로 제출하라."
         )
     else:
         sections.append(
             "[출력 규칙 - 첫 생성]\n"
             "수집된 기사 중 부서 데스크가 반드시 알아야 할 사안만 엄선한다.\n"
-            "- 건수보다 품질이 우선. [제외 기준]에 해당하면 선정하지 않는다\n"
+            "- 건수보다 품질 우선. [제외 기준]에 해당하면 선정하지 않는다\n"
             "- 이전 보고 이력을 참조하여 follow_up/new 분류\n"
-            "- 선택 사유(reason)를 명시 (왜 데스크가 알아야 하는지)\n"
-            "- source_indices로 참조 기사 번호를 기재 (URL 역매핑용)\n"
+            "- reason에 선정 사유를 명시한다 (왜 데스크가 알아야 하는지)\n"
+            "- source_indices로 참조 기사 번호를 기재한다 (URL 역매핑용)\n"
             "- [단독] 태그 또는 특정 언론사만 보도한 기사는 exclusive: true\n\n"
-            "중요: results 배열에는 [제외 기준]을 통과한 항목만 포함한다.\n"
-            "reason에 제외 사유('후속 가능성 낮음', '단발성' 등)를 적으면서 "
-            "results에 포함시키는 것은 모순이다.\n"
-            "submit_report 도구의 results 배열로 제출하라."
+            "results에는 [제외 기준]과 [중복/후속 판단 기준]을 모두 통과한 항목만 포함한다.\n"
+            "submit_report 도구로 제출하라."
         )
 
     return "\n\n".join(sections)
@@ -369,7 +369,7 @@ def _build_user_prompt(
     else:
         sections.append(
             "[이전 보고 이력 - 최근 2일]\n"
-            "이력 없음. 모든 항목을 category: \"new\", prev_reference: null로 설정하라."
+            "이력 없음. 모든 항목을 category: \"new\", prev_reference: \"\"로 설정하라."
         )
 
     # 시나리오 B: 기존 항목
@@ -416,6 +416,14 @@ def _parse_report_response(message, scenario: str) -> list[dict] | None:
     for block in message.content:
         if block.type == "tool_use" and block.name == "submit_report":
             raw_results = block.input.get("results", [])
+            # LLM이 배열을 JSON 문자열로 반환하는 경우 파싱
+            if isinstance(raw_results, str):
+                logger.warning("results가 문자열로 반환됨 (%d chars), JSON 파싱 시도", len(raw_results))
+                try:
+                    raw_results = json.loads(raw_results)
+                except (json.JSONDecodeError, ValueError):
+                    logger.error("results JSON 파싱 실패")
+                    return None
             results = [r for r in raw_results if isinstance(r, dict)]
             if len(results) != len(raw_results):
                 logger.warning(
@@ -476,7 +484,7 @@ async def analyze_report_articles(
                 temperature=temperature,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt}],
-                tools=[_REPORT_TOOL],
+                tools=[_build_report_tool(is_scenario_b)],
                 tool_choice={"type": "tool", "name": "submit_report"},
             )
 
