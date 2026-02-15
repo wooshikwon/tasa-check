@@ -198,13 +198,13 @@ results 배열 (단독/주요 기사):
   - merged_indices: 동일 사안으로 병합된 다른 기사 번호 (없으면 빈 배열)
   - title: 기사 제목
   - summary: 2~3문장 요약
-  - reason: 주요 판단 근거 1문장
+  - reason: 판단 근거 1~2문장
 
 skipped 배열 (스킵 기사):
   - topic_cluster: 주제 식별자
   - source_indices: 대표 기사 번호 ([새로 수집된 기사] 목록 번호)
   - title: 기사 제목
-  - reason: 스킵 사유
+  - reason: 스킵 사유 1~2문장
 """
 
 _ANALYSIS_TOOL = {
@@ -244,7 +244,7 @@ _ANALYSIS_TOOL = {
                         },
                         "reason": {
                             "type": "string",
-                            "description": "주요 판단 근거 1문장",
+                            "description": "판단 근거 1~2문장",
                         },
                     },
                     "required": [
@@ -271,7 +271,7 @@ _ANALYSIS_TOOL = {
                         "title": {"type": "string"},
                         "reason": {
                             "type": "string",
-                            "description": "스킵 사유",
+                            "description": "스킵 사유 1~2문장",
                         },
                     },
                     "required": ["topic_cluster", "source_indices", "title", "reason"],

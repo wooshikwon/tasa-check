@@ -148,7 +148,7 @@ def _build_report_tool(is_scenario_b: bool) -> dict:
         },
         "reason": {
             "type": "string",
-            "description": "results 포함 사유 1문장 (왜 데스크가 알아야 하는지)",
+            "description": "포함 사유 1~2문장 (왜 데스크가 알아야 하는지)",
         },
         "exclusive": {
             "type": "boolean",
