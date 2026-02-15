@@ -199,43 +199,55 @@ def _build_report_tool(is_scenario_b: bool) -> dict:
 _SYSTEM_PROMPT_TEMPLATE = """\
 당신은 {dept_label} 데스크의 뉴스 브리핑 보조입니다.
 오늘 날짜: {today}
+
+<analysis_rules> → <summary_rules> → <output_rules> 순서로 주어진 <articles>를 처리하라.
+분석 규칙은 step_1부터 순서대로 적용하며, 앞 단계에서 제외된 기사는 이후 단계를 평가하지 않는다.
 아래 지시사항은 절대적 규칙이다. 자의적 해석이나 예외 판단 없이 각 단계를 문자 그대로 준수하라.
-아래 제공된 기사 목록을 분석하여 데스크가 주목할 사안을 선별하고 요약하라.
 
-## 분석 규칙
-
-1단계: 본문에 오늘 발생한 팩트가 없으면 제외
+<analysis_rules>
+<step_1>
+본문에 오늘 발생한 팩트가 없으면 제외
 기사 본문에 "N일 A가 OO했다" 등 특정 주체의 오늘({today})자 팩트가 명시된 경우만 뉴스다.
   1-1) 본문에 "N일 A가 OO했다" 형식이 없는 종합·분석·해설 기사는 절대 오늘 뉴스가 될 수 없으므로 skip
   1-2) 본문에 '지난 00일' 팩트만 있고, 오늘 날짜의 팩트가 없는 경우에도 오늘 뉴스가 아니므로 skip
   1-3) 단, 오늘자 외신 인용("N일 로이터/NYT가 보도했다")이면, 오늘 날짜의 팩트가 없어도 당일 뉴스로 인정한다.
+</step_1>
 
-2단계: 뉴스 가치가 부족하면 제외
+<step_2>
+뉴스 가치가 부족하면 제외
 다음에 하나라도 해당하면 가치 없음으로 results에 포함하지 않는다:
   2-1) 단발성 사건·사고: 후속 보도 가능성이 낮은 단순 추락, 사망, 교통사고, 화재, 소규모 지진 등 개별 사건
   2-2) 단순 현황·통계·트렌드 발표: 정부 부처/기업 보도자료, 특정 기간 내 수치를 집계한 트렌드 통계 보도
   2-3) 단순 반응·환영·규탄: 법안 통과에 대한 지자체 환영, 성명 발표 등 자체 뉴스 가치 없는 반응
   2-4) 인터뷰·칼럼·사설: 기자 의견, 전문가 인터뷰 기사
   2-5) 연예·스포츠 가십: 부서 취재 영역과 무관한 연예인·선수 사생활
+</step_2>
 
-3단계: 보고 이력 중복 제외
+<step_3>
+보고 이력 중복 제외
 이전에 보고한 이력과 중복된 내용의 기사는 다시 보고하지 않는다:
   3-1) 이미 보고한 기사와 육하원칙(누가, 언제, 어디서, 무엇을)의 핵심 사실이 동일하면 재보고 절대 금지. 반드시 results에 포함하지 않는다.
   3-2) 현재 기사에 새로운 관점, 업계 반응, 추가적인 사실이 존재하더라도, 이전 보고한 기사와 핵심 육하원칙이 동일하면 절대 results에 포함하지 않는다.
+</step_3>
 
-4단계: results 분류 판단
+<step_4>
+results 분류 판단
 위 제외 대상이 아닌 기사 중 아래를 충족하는 것만 results에 포함:
   4-1) 기사 원문에 "N일 A가 OO했다" 등 특정 주체의 오늘({today}) 행위가 명시되어 있을 것
   4-2) 복수 언론이 보도하거나, 단독 보도라면 팩트의 무게가 충분할 것
   4-3) 단발성 내용이 아니며, 뉴스 가치 판단에 비추어 사안이 중대해 '후속 보도 가능성'이 높을 것
+</step_4>
 
-5단계: 동일 사안 병합 원칙
+<step_5>
+동일 사안 병합 원칙
 분류 기준을 충족한 기사들을 results에 포함할 때, 동일 사안은 병합한다:
   5-1) 같은 사안의 여러 언론사 기사는 source_indices로 묶어 1건으로 보고한다.
   5-2) 단, [단독] 기사는 별도 분류한다
   예) 'A 사건' 일반 보도 3건 + [단독] 1건 → 병합 1건 + [단독] 별도 1건
+</step_5>
+</analysis_rules>
 
-## 요약 작성 기준
+<summary_rules>
 기사 원문의 행위 주체와 시점을 육하원칙 스트레이트 형식으로 2~3문장 이내에 작성.
   - 오늘({today}) 발생한 사실만 요약.
     예) "A가 00일 어디서 B를 발표했다. 앞서 지난 XX일 C가 있었다" → 과거 사실 말고, 오늘 날짜인 00일 발표만 요약
@@ -243,11 +255,12 @@ _SYSTEM_PROMPT_TEMPLATE = """\
   - "N일 보도되었다/알려졌다"는 쓰지 않는다. 원문의 행위 주체와 시점만 기술한다
     예) "A사가 00일 매출 N% 증가를 공시했다", "미 상무부가 00일 제재 검토를 밝혔다(로이터 보도)"
   - LLM의 해석·평가·전망 금지. 판단은 reason 필드에만 기재
+</summary_rules>
 
 {output_rules_section}"""
 
 _OUTPUT_RULES_A = """\
-## 출력 규칙
+<output_rules>
 수집된 기사 중 부서 데스크가 반드시 알아야 할 사안만 엄선한다.
 - 건수보다 품질 우선. 분석 규칙의 제외 대상이면 results에 포함하지 않는다
 - reason에 포함 사유를 명시한다 (왜 데스크가 알아야 하는지)
@@ -255,11 +268,12 @@ _OUTPUT_RULES_A = """\
 - [단독] 태그 또는 특정 언론사만 보도한 기사는 exclusive: true
 
 위 단계를 모두 통과한 항목만 results에 포함한다.
-submit_report 도구로 제출하라."""
+submit_report 도구로 제출하라.
+</output_rules>"""
 
 _OUTPUT_RULES_B = """\
-## 출력 규칙
-수집된 기사를 오늘 기존 항목과 비교하여 변경/추가 사항만 보고한다.
+<output_rules>
+수집된 기사를 <existing_items>와 비교하여 변경/추가 사항만 보고한다.
 - action: "modified" — 기존 항목의 사안에 새로운 육하원칙의 뉴스가 발견된 경우
 - action: "added" — 기존 항목에 없는 새로운 사안
 - 기존 항목과 육하원칙이 동일한 기사는 추가 디테일이 있어도 results에 포함하지 않는다
@@ -267,7 +281,8 @@ _OUTPUT_RULES_B = """\
 - 수정/추가 항목이 없으면 빈 배열을 제출한다
 
 위 단계를 모두 통과한 항목만 results에 포함한다.
-submit_report 도구로 제출하라."""
+submit_report 도구로 제출하라.
+</output_rules>"""
 
 
 def _build_system_prompt(
@@ -304,28 +319,30 @@ def _build_user_prompt(
 
     # 이전 보고 이력
     if report_history:
-        lines = ["## 이전 브리핑 이력\n핵심 팩트가 동일한 수집된 기사 재보고 금지"]
+        lines = ["<briefing_history>\n핵심 팩트가 동일한 수집된 기사 재보고 금지"]
         for h in report_history:
             created = h.get("created_at", "")[:10]
             lines.append(
                 f"- \"{h['title']}\" | {h['summary']} | {created}"
             )
+        lines.append("</briefing_history>")
         sections.append("\n".join(lines))
     else:
-        sections.append("## 이전 브리핑 이력\n이력 없음")
+        sections.append("<briefing_history>\n이력 없음\n</briefing_history>")
 
     # 시나리오 B: 기존 항목
     is_scenario_b = existing_items is not None and len(existing_items) > 0
     if is_scenario_b:
-        lines = ["## 오늘 기존 항목"]
+        lines = ["<existing_items>"]
         for seq, item in enumerate(existing_items, 1):
             lines.append(
                 f"- 항목{seq} | {item['title']} | 요약: {item['summary']}"
             )
+        lines.append("</existing_items>")
         sections.append("\n".join(lines))
 
     # 수집된 기사 목록
-    lines = ["## 수집된 기사 목록"]
+    lines = ["<articles>"]
     for i, a in enumerate(articles, 1):
         publisher = a.get("publisher", "")
         title = a.get("title", "")
@@ -335,6 +352,7 @@ def _build_user_prompt(
         if body:
             lines.append(f"   본문: {body}")
         lines.append(f"   시각: {pub_date}")
+    lines.append("</articles>")
     sections.append("\n".join(lines))
 
     # 분석 지시
