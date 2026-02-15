@@ -144,7 +144,7 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 기자의 취재 키워드: {keywords_section}
 
 아래 기사들은 위 키워드로 검색된 결과이나, 검색 API 특성상 키워드와 무관한 기사가 포함될 수 있다.
-반드시 기사의 주체·대상이 키워드에 명시된 기업/기관/인물과 직접 일치하는 경우에만 판단 대상으로 삼는다.
+기사의 주체·대상이 키워드에 명시된 기업/기관/인물과 직접 일치하는 경우에만 판단 대상으로 삼는다.
   1-1) 같은 업종·분야라도 키워드에 없는 기업/기관의 기사는 관련 없는 것으로 판단해 skip한다.
     예) "엔비디아" → 삼성전자 반도체, TSMC 등 다른 반도체 기업은 skip
     예) "구글" → 네이버, 카카오 등 다른 IT 기업은 skip
@@ -158,7 +158,7 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 <step_2>
 본문에 오늘 발생한 팩트가 없으면 skip
 기사 본문에 "N일 A가 OO했다" 등 특정 주체의 오늘({today})자 팩트가 명시된 경우만 뉴스다.
-  2-1) 본문에 "N일 A가 OO했다" 형식이 없는 종합·분석·해설 기사는 절대 오늘 뉴스가 될 수 없으므로 skip
+  2-1) 본문에 "N일 A가 OO했다" 형식이 없는 종합·분석·해설 기사는 오늘 뉴스가 아니므로 skip
   2-2) 본문에 '지난 00일' 팩트만 있고, 오늘 날짜의 팩트가 없는 경우에도 오늘 뉴스가 아니므로 skip
   2-3) 단, 오늘자 외신 인용("N일 로이터/NYT가 보도했다")이면, 오늘 날짜의 팩트가 없어도 당일 뉴스로 인정한다.
 </step_2>
@@ -176,8 +176,8 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 <step_4>
 보고 이력 중복 skip
 이전에 보고 및 skip한 이력과 중복된 내용의 기사는 다시 보고하지 않는다:
-  4-1) 이미 체크한 기사와 육하원칙(누가, 언제, 어디서, 무엇을)의 핵심 사실이 동일하면 재보고 절대 금지. 반드시 skip한다.
-  4-2) 현재 기사에 새로운 관점, 업계 반응, 추가적인 사실이 존재하더라도, 이전 보고한 기사와 핵심 육하원칙이 동일하면 반드시 skip한다.
+  4-1) 이미 체크한 기사와 육하원칙(누가, 언제, 어디서, 무엇을)의 핵심 사실이 동일하면 skip한다.
+  4-2) 현재 기사에 새로운 관점, 업계 반응, 추가적인 사실이 존재하더라도, 이전 보고한 기사와 핵심 육하원칙이 동일하면 skip한다.
   4-3) 이전에 이미 skip된 기사가 반복 등장한 것도 당연히 skip 유지.
 </step_4>
 
@@ -204,7 +204,7 @@ results 분류 판단
   - 인물명, 기관명, 장소, 수치, 일시 등 구체적 팩트 포함
   - "N일 보도되었다/알려졌다"는 쓰지 않는다. 원문의 행위 주체와 시점만 기술한다
     예) "A사가 00일 매출 N% 증가를 공시했다", "미 상무부가 00일 제재 검토를 밝혔다(로이터 보도)"
-  - LLM의 해석·평가·전망 금지. 판단은 reason 필드에만 기재
+  - 해석·평가·전망을 넣지 않는다. 판단은 reason 필드에만 기재
 </summary_rules>
 
 <output_format>
@@ -234,6 +234,10 @@ _ANALYSIS_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
+            "thinking": {
+                "type": "string",
+                "description": "각 기사별 단계별 판단 과정 (기사 번호, 적용 단계, skip/통과 판단과 근거)",
+            },
             "results": {
                 "type": "array",
                 "description": "단독/주요 기사 항목 배열",
@@ -299,7 +303,7 @@ _ANALYSIS_TOOL = {
                 },
             },
         },
-        "required": ["results", "skipped"],
+        "required": ["thinking", "results", "skipped"],
     },
 }
 
@@ -328,7 +332,7 @@ def _build_user_prompt(
     skipped_history = [h for h in history if h["category"] == "skip"]
 
     if reported_history:
-        lines = ["<report_history>\n핵심 팩트가 동일한 수집된 기사 재보고 금지"]
+        lines = ["<report_history>\n핵심 팩트가 동일한 기사는 재보고하지 않는다"]
         for h in reported_history:
             time_str = _to_kst(h.get("checked_at", ""))
             summary = h.get("summary", "")
@@ -340,7 +344,7 @@ def _build_user_prompt(
         sections.append("<report_history>\n이력 없음\n</report_history>")
 
     if skipped_history:
-        lines = ["<skip_history>\n핵심 팩트가 동일한 수집된 기사 재보고 금지"]
+        lines = ["<skip_history>\n핵심 팩트가 동일한 기사는 재보고하지 않는다"]
         for h in skipped_history:
             reason = h.get("reason", "")
             lines.append(f"- \"{h['topic_cluster']}\" → {reason}")
@@ -360,6 +364,8 @@ def _build_user_prompt(
         lines.append(f"   시각: {pub_date}")
     lines.append("</articles>")
     sections.append("\n".join(lines))
+
+    sections.append("위 기사를 분석하여 submit_analysis로 제출하라.")
 
     return "\n\n".join(sections)
 

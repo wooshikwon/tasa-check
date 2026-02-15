@@ -181,6 +181,10 @@ def _build_report_tool(is_scenario_b: bool) -> dict:
         "input_schema": {
             "type": "object",
             "properties": {
+                "thinking": {
+                    "type": "string",
+                    "description": "각 기사별 단계별 판단 과정 (기사 번호, 적용 단계, 제외/통과 판단과 근거)",
+                },
                 "results": {
                     "type": "array",
                     "description": "브리핑 항목 배열 (기준 미달 시 빈 배열)",
@@ -191,7 +195,7 @@ def _build_report_tool(is_scenario_b: bool) -> dict:
                     },
                 },
             },
-            "required": ["results"],
+            "required": ["thinking", "results"],
         },
     }
 
@@ -208,7 +212,7 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 <step_1>
 본문에 오늘 발생한 팩트가 없으면 제외
 기사 본문에 "N일 A가 OO했다" 등 특정 주체의 오늘({today})자 팩트가 명시된 경우만 뉴스다.
-  1-1) 본문에 "N일 A가 OO했다" 형식이 없는 종합·분석·해설 기사는 절대 오늘 뉴스가 될 수 없으므로 skip
+  1-1) 본문에 "N일 A가 OO했다" 형식이 없는 종합·분석·해설 기사는 오늘 뉴스가 아니므로 skip
   1-2) 본문에 '지난 00일' 팩트만 있고, 오늘 날짜의 팩트가 없는 경우에도 오늘 뉴스가 아니므로 skip
   1-3) 단, 오늘자 외신 인용("N일 로이터/NYT가 보도했다")이면, 오늘 날짜의 팩트가 없어도 당일 뉴스로 인정한다.
 </step_1>
@@ -226,8 +230,8 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 <step_3>
 보고 이력 중복 제외
 이전에 보고한 이력과 중복된 내용의 기사는 다시 보고하지 않는다:
-  3-1) 이미 보고한 기사와 육하원칙(누가, 언제, 어디서, 무엇을)의 핵심 사실이 동일하면 재보고 절대 금지. 반드시 results에 포함하지 않는다.
-  3-2) 현재 기사에 새로운 관점, 업계 반응, 추가적인 사실이 존재하더라도, 이전 보고한 기사와 핵심 육하원칙이 동일하면 절대 results에 포함하지 않는다.
+  3-1) 이미 보고한 기사와 육하원칙(누가, 언제, 어디서, 무엇을)의 핵심 사실이 동일하면 results에 포함하지 않는다.
+  3-2) 현재 기사에 새로운 관점, 업계 반응, 추가적인 사실이 존재하더라도, 이전 보고한 기사와 핵심 육하원칙이 동일하면 results에 포함하지 않는다.
 </step_3>
 
 <step_4>
@@ -254,14 +258,14 @@ results 분류 판단
   - 인물명, 기관명, 장소, 수치, 일시 등 구체적 팩트 포함
   - "N일 보도되었다/알려졌다"는 쓰지 않는다. 원문의 행위 주체와 시점만 기술한다
     예) "A사가 00일 매출 N% 증가를 공시했다", "미 상무부가 00일 제재 검토를 밝혔다(로이터 보도)"
-  - LLM의 해석·평가·전망 금지. 판단은 reason 필드에만 기재
+  - 해석·평가·전망을 넣지 않는다. 판단은 reason 필드에만 기재
 </summary_rules>
 
 {output_rules_section}"""
 
 _OUTPUT_RULES_A = """\
 <output_rules>
-수집된 기사 중 부서 데스크가 반드시 알아야 할 사안만 엄선한다.
+수집된 기사 중 부서 데스크가 알아야 할 사안만 엄선한다.
 - 건수보다 품질 우선. 분석 규칙의 제외 대상이면 results에 포함하지 않는다
 - reason에 포함 사유를 명시한다 (왜 데스크가 알아야 하는지)
 - source_indices로 참조 기사 번호를 기재한다 (URL 역매핑용)
@@ -277,7 +281,7 @@ _OUTPUT_RULES_B = """\
 - action: "modified" — 기존 항목의 사안에 새로운 육하원칙의 뉴스가 발견된 경우
 - action: "added" — 기존 항목에 없는 새로운 사안
 - 기존 항목과 육하원칙이 동일한 기사는 추가 디테일이 있어도 results에 포함하지 않는다
-- modified 항목은 item_id(기존 항목 순번)를 반드시 기재한다
+- modified 항목은 item_id(기존 항목 순번)를 기재한다
 - 수정/추가 항목이 없으면 빈 배열을 제출한다
 
 위 단계를 모두 통과한 항목만 results에 포함한다.
@@ -319,7 +323,7 @@ def _build_user_prompt(
 
     # 이전 보고 이력
     if report_history:
-        lines = ["<briefing_history>\n핵심 팩트가 동일한 수집된 기사 재보고 금지"]
+        lines = ["<briefing_history>\n핵심 팩트가 동일한 기사는 재보고하지 않는다"]
         for h in report_history:
             created = h.get("created_at", "")[:10]
             lines.append(
