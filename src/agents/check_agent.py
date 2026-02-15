@@ -68,6 +68,8 @@ async def filter_check_articles(
     dept_label = _dept_label(department)
     profile = DEPARTMENT_PROFILES.get(dept_label, {})
     coverage = profile.get("coverage", "")
+    criteria = profile.get("criteria", [])
+    criteria_text = "\n".join(f"  - {c}" for c in criteria)
 
     # 기사 목록 텍스트 조립 (번호, 언론사, 제목, description)
     lines = []
@@ -80,7 +82,8 @@ async def filter_check_articles(
 
     system_prompt = (
         f"당신은 {dept_label} 뉴스 필터입니다.\n"
-        f"취재 영역: {coverage}\n\n"
+        f"취재 영역: {coverage}\n"
+        f"주요 기사 기준:\n{criteria_text}\n\n"
         "아래 기사 목록에서 다음 기준으로 기사 번호를 선별하세요:\n"
         "1. 부서 관련성: 해당 부서 취재 영역에 해당하는 기사만 포함\n"
         "2. 사진 캡션 제외: 본문 없이 사진 설명만 있는 포토뉴스 제외\n"
@@ -134,7 +137,7 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 [기자의 취재 키워드]
 {keywords_section}
 
-[1단계: 키워드 관련성 skip]
+[1단계: 키워드 관련성이 없으면 skip]
 이 필터는 모든 판단보다 먼저 적용된다.
 아래 기사들은 키워드로 검색된 결과이나, 검색 API 특성상 키워드와 무관한 기사가 포함될 수 있다.
 반드시 기사의 주체·대상이 위 키워드에 명시된 기업/기관/인물과 직접 일치하는 경우에만 판단 대상으로 삼는다.
@@ -147,10 +150,11 @@ _SYSTEM_PROMPT_TEMPLATE = """\
     예) 키워드 "엔비디아" → "삼성전자가 엔비디아向 HBM 납품" → 주체가 삼성전자이므로 skip
   1-3) 키워드와 무관한 기사는 [단독] 태그 여부나 기사 가치와 무관하게 반드시 skip 처리한다
 
-[2단계: 뉴스가 아닌 것은 skip]
-기사 원문에 "N일 A가 OO했다" 등 특정 주체의 오늘({today}) 행위가 명시된 경우만 뉴스다. 뉴스가 아니면 skip한다.
-  2-1) 단, 오늘자 외신 인용("N일 로이터/NYT가 보도했다")은 출처가 명확한 당일 뉴스로 인정한다.
-  2-2) "N일 A가 OO했다" 형식이 확인되지 않는 종합·분석·해설 기사는 절대 뉴스가 아니므로 skip 처리한다.
+[2단계: 본문에 오늘 발생한 팩트가 없으면 skip]
+기사 본문에 "N일 A가 OO했다" 등 특정 주체의 오늘({today})자 팩트가 명시된 경우만 뉴스다.
+  2-1) 본문에 "N일 A가 OO했다" 형식이 없는 종합·분석·해설 기사는 절대 오늘 뉴스가 될 수 없으므로 skip
+  2-2) 본문에 '지난 00일' 팩트만 있고, 오늘 날짜의 팩트가 없는 경우에도 오늘 뉴스가 아니므로 skip
+  2-3) 단, 오늘자 외신 인용("N일 로이터/NYT가 보도했다")이면, 오늘 날짜의 팩트가 없어도 당일 뉴스로 인정한다.
 
 [3단계: 뉴스 가치가 부족하면 skip]
 다음에 하나라도 해당하면 가치 없음으로 skip한다:
