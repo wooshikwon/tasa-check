@@ -40,8 +40,8 @@ async def search_news(
 - `max_results` -- 반환할 최대 기사 수. 기본값 `200`(check), report 호출 시 `400`을 전달한다.
 
 **호출 지점별 max_results:**
-- `/check` 명령: 기본값 200건 (`src/bot/handlers.py` 54행)
-- `/report` 명령: 400건 명시 전달 (`src/bot/handlers.py` 143행)
+- `/check` 명령: 300건 (`src/bot/handlers.py`에서 `max_results=300` 전달)
+- `/report` 명령: 300건 명시 전달 (`src/bot/handlers.py`에서 `max_results=300` 전달)
 
 **실행 흐름:**
 
@@ -148,7 +148,7 @@ def _parse_item(item: dict) -> dict:
 ```
 
 **처리 내용:**
-- `title`, `description`: `_strip_html()`으로 `<b>`, `</b>` 등 HTML 태그를 제거한다.
+- `title`, `description`: `_strip_html()`으로 HTML 태그를 제거하고 `html.unescape()`로 HTML 엔티티를 디코딩한다.
 - `pubDate`: `_parse_pub_date()`로 RFC 2822 형식 문자열(`"Thu, 13 Feb 2026 14:30:00 +0900"`)을 `datetime` 객체로 변환한다. 내부적으로 `email.utils.parsedate_to_datetime()`을 사용한다.
 - `link`, `originallink`: API 응답 값을 그대로 전달한다.
 
@@ -166,7 +166,7 @@ def _parse_item(item: dict) -> dict:
 
 파일 경로: `src/tools/scraper.py`
 
-네이버 뉴스(`n.news.naver.com`) 기사 페이지에서 본문 첫 1~3문단을 추출한다. Claude 분석 시 context 절약을 위해 전체 본문이 아닌 앞부분만 가져온다.
+네이버 뉴스(`n.news.naver.com`) 기사 페이지에서 본문을 최대 800자 추출한다. Claude 분석 시 context 절약을 위해 전체 본문이 아닌 앞부분만 가져온다.
 
 ### 2.1. 모듈 상수
 
@@ -174,7 +174,7 @@ def _parse_item(item: dict) -> dict:
 |---|---|---|
 | `_TIMEOUT` | `10.0` | HTTP 요청 타임아웃 (초) |
 | `_HEADERS` | Chrome UA 문자열 | User-Agent 위장 헤더 |
-| `_MAX_PARAGRAPHS` | `3` | 추출할 최대 문단 수 |
+| `_MAX_CHARS` | `800` | 추출할 최대 글자 수 |
 | `_SUBHEADING_MARKERS` | `set("▶■◆●△▷▲►◇□★☆※➤")` | 소제목 판별용 특수 기호 집합 |
 | `_scrape_semaphore` | `asyncio.Semaphore(50)` | 전역 동시 스크래핑 제한 |
 
@@ -238,7 +238,7 @@ async def fetch_article_body(url: str) -> str | None:
 def _parse_article_body(html: str) -> str | None:
 ```
 
-네이버 뉴스 기사 HTML에서 본문 첫 3문단을 추출한다.
+네이버 뉴스 기사 HTML에서 본문을 최대 800자 추출한다.
 
 **파싱 단계:**
 
@@ -259,15 +259,15 @@ container = soup.select_one("article#dic_area") or soup.select_one("div#newsct_a
 - **사진 캡션 필터링**: `<p>` 태그의 상위 요소 중 class에 `"photo"`, `"img"`, `"vod"` 문자열이 포함된 것이 있으면 건너뛴다.
 - **빈 텍스트 필터링**: `get_text(strip=True)` 결과가 빈 문자열이면 건너뛴다.
 - **소제목 필터링**: `_is_subheading()` 판별 결과가 `True`이면 건너뛴다.
-- `_MAX_PARAGRAPHS`(3)개에 도달하면 순회를 중단한다.
+- 총 글자 수가 `_MAX_CHARS`(800)에 도달하면 순회를 중단한다.
 
 **3단계 -- raw text 폴백:**
 
-`<p>` 태그에서 문단을 하나도 추출하지 못한 경우, 컨테이너의 전체 텍스트를 줄바꿈(`\n`) 기준으로 분리하여 동일한 소제목 필터링을 적용한다.
+`<p>` 태그에서 문단을 하나도 추출하지 못한 경우, 컨테이너의 전체 텍스트를 줄바꿈(`\n`) 기준으로 분리하여 동일한 소제목 필터링과 800자 제한을 적용한다.
 
 **4단계 -- 결과 조합:**
 
-추출된 문단들을 `"\n".join(paragraphs)`으로 합쳐 반환한다. 문단이 없으면 `None`을 반환한다.
+추출된 문단들을 `"\n".join(paragraphs)`으로 합치고 800자 초과 시 잘라서 반환한다. 문단이 없으면 `None`을 반환한다.
 
 ### 2.5. _is_subheading() -- 소제목 판별
 
@@ -412,9 +412,11 @@ NAVER_CLIENT_SECRET: str = os.environ["NAVER_CLIENT_SECRET"]
 | 사회부 | 13개 | 경찰 수사, 검찰 기소, 법원 판결, 부동산 정책, 의료 보건 등 |
 | 정치부 | 12개 | 국회, 대통령실, 여당, 야당, 외교, 헌법재판소 등 |
 | 경제부 | 13개 | 기준금리, 부동산 규제, 물가 상승, 수출 실적, GDP 등 |
-| 산업부 | 13개 | 반도체, 배터리, AI 인공지능, 대기업 실적, M&A 인수합병 등 |
+| 산업부 | 12개 | 삼성그룹, LG그룹, SK그룹, 에너지 전력, 통상 관세 FTA 등 |
+| 테크부 | 12개 | 삼성전자 반도체, SK하이닉스, AI 인공지능, 바이오 신약 등 |
 | 문화부 | 12개 | 영화 흥행, 드라마, 방송, OTT, 한류, K팝 아이돌 등 |
 | 스포츠부 | 11개 | 프로야구, 축구 대표팀, 올림픽, FA 이적, 월드컵 등 |
+| 국제부 | 12개 | 미국 트럼프, 중국 시진핑, EU 유럽, 우크라이나, 글로벌 경제 등 |
 
 ---
 
@@ -521,13 +523,13 @@ NAVER_CLIENT_SECRET: str = os.environ["NAVER_CLIENT_SECRET"]
 [키워드]
   |
   v
-search_news()  -- 네이버 API로 기사 수집 (check: 200건, report: 400건)
+search_news()  -- 네이버 API로 기사 수집 (check: 300건, report: 300건)
   |
   v
 filter_by_publisher()  -- 화이트리스트 27개 언론사 필터링
   |
   v
-fetch_articles_batch()  -- 네이버 뉴스 링크로 본문 1~3문단 스크래핑
+fetch_articles_batch()  -- 네이버 뉴스 링크로 본문 최대 800자 스크래핑
   |
   v
 get_publisher_name()  -- 각 기사에 언론사명 부여

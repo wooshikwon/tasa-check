@@ -6,7 +6,7 @@
 
 import json
 import logging
-from datetime import timezone, timedelta
+from datetime import datetime, timezone, timedelta
 
 import anthropic
 from langfuse import get_client as get_langfuse
@@ -150,11 +150,6 @@ def _build_report_tool(is_scenario_b: bool) -> dict:
             "type": "string",
             "description": "선택 사유 1문장",
         },
-        "category": {
-            "type": "string",
-            "enum": ["follow_up", "new"],
-            "description": "follow_up=이전 보도 단독 후속, new=신규 사안",
-        },
         "key_facts": {
             "type": "array",
             "items": {"type": "string"},
@@ -164,22 +159,17 @@ def _build_report_tool(is_scenario_b: bool) -> dict:
             "type": "boolean",
             "description": "[단독] 태그 또는 특정 언론사만 보도한 기사이면 true",
         },
-        "prev_reference": {
-            "type": "string",
-            "description": "follow_up이면 'YYYY-MM-DD \"이전 제목\"', new이면 빈 문자열",
-        },
     }
     required = [
         "title", "source_indices", "summary",
-        "reason", "category", "key_facts",
-        "exclusive", "prev_reference",
+        "reason", "key_facts", "exclusive",
     ]
 
     if is_scenario_b:
         item_props["action"] = {
             "type": "string",
             "enum": ["modified", "added"],
-            "description": "modified=기존 항목에 단독 기사 발견, added=새로운 사안",
+            "description": "modified=기존 항목에 새 육하원칙 뉴스 발견, added=새로운 사안",
         }
         item_props["item_id"] = {
             "type": "integer",
@@ -208,136 +198,107 @@ def _build_report_tool(is_scenario_b: bool) -> dict:
     }
 
 
+_SYSTEM_PROMPT_TEMPLATE = """\
+당신은 {dept_label} 데스크의 뉴스 브리핑 보조입니다.
+오늘 날짜: {today}
+아래 제공된 기사 목록을 분석하여 데스크가 주목할 사안을 선별하고 요약합니다.
+
+[취재 영역 - {dept_label}]
+{coverage_section}
+
+[1단계: 뉴스 판단]
+기사 본문에 사건 발생 시점(날짜, 일시)이 오늘로 명시된 사안만 뉴스로 판단한다.
+'언제'는 기사 게시 시각이 아니라 본문 속 사건 자체의 발생 시점이다.
+본문에 사건 발생 시점(오늘)이 없는 종합·분석·해설 기사는 뉴스가 아니다.
+
+다음에 해당하면 뉴스 가치 없음으로 제외:
+- 단발성 사건·사고: 추락, 사망, 교통사고, 화재 등 후속 보도 가능성이 낮은 개별 사건
+- 정례적 발표: 정부 부처 보도자료, 정기 통계, 일상적 권고·캠페인
+- 단순 일정·예고: 행사 안내, 연휴 당부, 날씨 전망
+- 관심도 낮은 사안: 소규모 지역 이슈, 단일 기관 내부 사안
+- 인터뷰·칼럼·사설: 기자 의견, 전문가 인터뷰 단독 기사
+- 재탕·종합 보도: 이미 알려진 팩트를 재구성한 기사, 타 매체 인용 정리 기사
+- 연예·스포츠 가십: 부서 취재 영역과 무관한 연예인·선수 사생활
+
+뉴스 가치 판단 참고:
+- 복수 언론이 보도하거나, 단독 보도라면 팩트의 무게가 충분할 것
+- 후속 보도 가능성이 높거나, 사안 자체가 사회적으로 중대할 것
+
+부서별 주요 기사 기준 — {dept_label} 데스크가 반드시 알아야 할 핵심 사안만 엄선:
+{criteria_section}
+
+자기 검증: reason을 먼저 작성하라. reason이 위 제외 유형에 해당하면 해당 기사는 제외 대상이다.
+reason에 '당일 보도', '오늘 뉴스' 등 수집 시점에 관한 당연한 사실은 쓰지 않는다. 왜 데스크가 이 사안을 알아야 하는지만 기재한다.
+
+[2단계: 이전 보고 대비]
+이전에 보고한 기사와 육하원칙(누가, 언제, 어디서, 무엇을)의 핵심 사실이 동일하면 중복이므로 제외한다.
+육하원칙이 동일한 가운데 관점, 수치, 반응 등 디테일만 추가된 것은 새로운 뉴스가 아니다.
+
+[3단계: 동일 사안 병합]
+같은 사안의 여러 언론사 기사는 source_indices로 묶어 1건으로 보고한다.
+  예) 'A 사건' 일반 보도 3건 → 1건으로 병합 (source_indices: [1, 2, 3])
+
+[4단계: 단독 식별]
+[단독] 태그가 있는 기사는 항상 선정한다.
+  예) 'A 사건' 일반 보도 3건 + [단독] 1건 → 병합 1건 + [단독] 별도 1건
+
+[요약 작성 기준]
+- key_facts에는 당일 새로 발생/확인된 팩트만 기록한다
+- 2~3줄 이내로 작성
+- 육하원칙(누가, 언제, 어디서, 무엇을, 어떻게, 왜) 스트레이트 형식으로 작성.
+- 당일 발생한 사실만 요약. 기사 내 과거 경위·배경은 포함하지 않는다
+  예) "A가 14일 어디서 B를 발표했다. 앞서 7일 C가 있었다" → 14일 발표만 요약
+- 인물명, 기관명, 장소, 수치, 일시 등 구체적 팩트 포함
+- LLM의 해석·평가·전망 금지. 판단은 reason 필드에만 기재
+
+{output_rules_section}"""
+
+_OUTPUT_RULES_A = """\
+[출력 규칙 - 첫 생성]
+수집된 기사 중 부서 데스크가 반드시 알아야 할 사안만 엄선한다.
+- 건수보다 품질 우선. 1단계 뉴스 판단의 제외 대상이면 선정하지 않는다
+- reason에 선정 사유를 명시한다 (왜 데스크가 알아야 하는지)
+- source_indices로 참조 기사 번호를 기재한다 (URL 역매핑용)
+- [단독] 태그 또는 특정 언론사만 보도한 기사는 exclusive: true
+
+위 단계를 모두 통과한 항목만 results에 포함한다.
+submit_report 도구로 제출하라."""
+
+_OUTPUT_RULES_B = """\
+[출력 규칙 - 업데이트]
+수집된 기사를 유저 프롬프트의 [오늘 기존 항목]과 비교하여 변경/추가 사항만 보고한다.
+- action: "modified" — 기존 항목의 사안에 새로운 육하원칙의 뉴스가 발견된 경우
+- action: "added" — 기존 항목에 없는 새로운 사안
+- 기존 항목과 육하원칙이 동일한 기사는 추가 디테일이 있어도 선정하지 않는다
+- modified 항목은 item_id(기존 항목 순번)를 반드시 기재한다
+- 수정/추가 항목이 없으면 빈 배열을 제출한다
+
+위 단계를 모두 통과한 항목만 results에 포함한다.
+submit_report 도구로 제출하라."""
+
+
 def _build_system_prompt(
     department: str,
     existing_items: list[dict] | None,
 ) -> str:
-    """시스템 프롬프트를 조립한다.
-
-    Args:
-        department: 부서명
-        existing_items: 시나리오 B일 때 당일 기존 캐시 항목 (None이면 시나리오 A)
-    """
+    """시스템 프롬프트를 조립한다."""
     dept_label = _dept_label(department)
     profile = DEPARTMENT_PROFILES.get(dept_label, {})
-    coverage = profile.get("coverage", "")
+    coverage_section = profile.get("coverage", "")
     criteria = profile.get("criteria", [])
+    criteria_section = "\n".join(f"- {c}" for c in criteria)
 
     is_scenario_b = existing_items is not None and len(existing_items) > 0
+    output_rules_section = _OUTPUT_RULES_B if is_scenario_b else _OUTPUT_RULES_A
 
-    sections = [
-        f"당신은 {dept_label} 데스크의 뉴스 브리핑 보조입니다.\n"
-        "아래 제공된 기사 목록을 분석하여 데스크가 주목할 사안을 선별하고 요약합니다.",
-    ]
-
-    # 취재 영역
-    if coverage:
-        sections.append(f"[취재 영역 - {dept_label}]\n{coverage}")
-
-    # 판단 기준
-    criteria_lines = [f"[중요 기사 판단 기준 - {dept_label}]"]
-    criteria_lines.append(
-        f"{dept_label} 데스크가 반드시 알아야 할 핵심 사안만 엄선한다. "
-        "아래 기준을 모두 충족하는 기사만 선정:"
+    today = datetime.now(_KST).strftime("%Y-%m-%d")
+    return _SYSTEM_PROMPT_TEMPLATE.format(
+        dept_label=dept_label,
+        today=today,
+        coverage_section=coverage_section,
+        criteria_section=criteria_section,
+        output_rules_section=output_rules_section,
     )
-    criteria_lines.append(
-        "1) 복수 언론이 보도하거나, 단독 보도라면 팩트의 무게가 충분할 것"
-    )
-    criteria_lines.append(
-        "2) 후속 보도 가능성이 높거나, 사안 자체가 사회적으로 중대할 것"
-    )
-    criteria_lines.append(
-        "3) 아래 부서별 세부 기준에 해당할 것:"
-    )
-    for c in criteria:
-        criteria_lines.append(f"- {c}")
-    sections.append("\n".join(criteria_lines))
-
-    # 단독 식별
-    sections.append(
-        "[단독 기사 식별 — 최우선 선정 대상]\n"
-        "- 제목에 [단독] 태그가 있으면 무조건 선정\n"
-        "- 제목에 없더라도 본문에 \"OO 취재에 따르면\", \"본지 취재 결과\" 등 "
-        "'취재에 따르면' 패턴이 있으면 자체 취재 = 사실상 단독\n"
-        "- 본문 어미로 기사 가치 판단:\n"
-        "  · \"알려졌다\", \"전해졌다\" → 풍문 수준, 팩트 확인 약함\n"
-        "  · \"나타났다\", \"드러났다\" → 객관적 사실·공식 발표\n"
-        "  · \"취재에 따르면\", \"확인됐다\" → 자체 취재·신규 팩트, 가장 높은 뉴스 가치"
-    )
-
-    # 제외 기준
-    sections.append(
-        "[제외 기준]\n"
-        "다음 유형의 기사는 results에 포함하지 않는다:\n"
-        "- 단발성 사건·사고: 추락, 사망, 교통사고, 화재 등 후속 보도 가능성이 낮은 개별 사건\n"
-        "- 정례적 발표: 정부 부처 보도자료, 정기 통계, 일상적 권고·캠페인\n"
-        "- 단순 일정·예고: 행사 안내, 연휴 당부, 날씨 전망\n"
-        "- 관심도 낮은 사안: 소규모 지역 이슈, 단일 기관 내부 사안\n"
-        "- 인터뷰·칼럼·사설: 기자 의견, 전문가 인터뷰 단독 기사\n"
-        "- 재탕·종합 보도: 이미 알려진 팩트를 재구성한 기사, 타 매체 인용 정리 기사\n"
-        "- 연예·스포츠 가십: 부서 취재 영역과 무관한 연예인·선수 사생활\n\n"
-        "선정 전 자기 검증: reason을 먼저 작성하라. "
-        "reason이 위 제외 유형에 해당하면('후속 가능성 낮음', '단발성' 등) 해당 기사는 제외 대상이다."
-    )
-
-    # 요약 작성 기준
-    sections.append(
-        "[요약 작성 기준]\n"
-        "- 2~3줄 이내로 작성\n"
-        "- 육하원칙(누가, 언제, 어디서, 무엇을, 어떻게, 왜) 스트레이트 형식\n"
-        "- 당일 발생한 사실만 요약. 기사 내 과거 경위·배경은 포함하지 않는다\n"
-        "  예) \"A가 14일 B를 발표했다. 앞서 7일 C가 있었다\" → 14일 발표만 요약\n"
-        "- 인물명, 기관명, 수치, 일시 등 구체적 팩트 포함\n"
-        "- LLM의 해석·평가·전망 금지. 판단은 reason 필드에만 기재"
-    )
-
-    # 동일 사안 병합/분리 규칙
-    sections.append(
-        "[동일 사안 병합/분리 규칙]\n"
-        "- 동일 사안의 복수 보도는 source_indices로 묶어 1건으로 보고\n"
-        "- 단독 보도([단독] 또는 '취재에 따르면')만 별도 항목으로 분리\n"
-        "  예) 'A 사건' 일반 보도 3건 → 1건으로 병합 (source_indices: [1, 2, 3])\n"
-        "  예) 'A 사건' 일반 보도 3건 + [단독] 1건 → 2건으로 분리"
-    )
-
-    # 중복/후속 판단 기준
-    sections.append(
-        "[중복/후속 판단 기준]\n"
-        "동일 뉴스 판단: 육하원칙(누가, 언제, 어디서, 무엇을)의 핵심 사실이 동일하면 동일 뉴스다.\n"
-        "같은 발표·발언·사건의 새로운 앵글·관점·추가 수치·반응·배경·디테일은 새 뉴스가 아니다.\n\n"
-        "- new: 이전 보고 이력에 없는 새로운 사안만 선정\n"
-        "- follow_up: 이전 보고된 사안 중 [단독] 또는 \"취재에 따르면\" 패턴이 있는 단독 기사만 선정 가능\n"
-        "- 위 두 조건에 해당하지 않는 이전 보고 사안은 어떤 사유로도 선정하지 않는다\n"
-        "- key_facts에는 당일 새로 발생/확인된 팩트만 기록한다"
-    )
-
-    # 시나리오별 출력 규칙 (기존 항목은 유저 프롬프트에서만 제공)
-    if is_scenario_b:
-        sections.append(
-            "[출력 규칙 - 업데이트]\n"
-            "수집된 기사를 유저 프롬프트의 [오늘 기존 항목]과 비교하여 변경/추가 사항만 보고한다.\n"
-            "- action: \"modified\" — 기존 항목의 사안에 단독 기사([단독] 또는 '취재에 따르면')가 새로 발견된 경우\n"
-            "- action: \"added\" — 기존 항목에 없는 새로운 사안\n"
-            "- 기존 항목과 육하원칙이 동일한 기사는 추가 디테일이 있어도 선정하지 않는다\n"
-            "- modified 항목은 item_id(기존 항목 순번)를 반드시 기재한다\n"
-            "- 수정/추가 항목이 없으면 빈 배열을 제출한다\n\n"
-            "results에는 [제외 기준]과 [중복/후속 판단 기준]을 모두 통과한 항목만 포함한다.\n"
-            "submit_report 도구로 제출하라."
-        )
-    else:
-        sections.append(
-            "[출력 규칙 - 첫 생성]\n"
-            "수집된 기사 중 부서 데스크가 반드시 알아야 할 사안만 엄선한다.\n"
-            "- 건수보다 품질 우선. [제외 기준]에 해당하면 선정하지 않는다\n"
-            "- 이전 보고 이력을 참조하여 follow_up/new 분류\n"
-            "- reason에 선정 사유를 명시한다 (왜 데스크가 알아야 하는지)\n"
-            "- source_indices로 참조 기사 번호를 기재한다 (URL 역매핑용)\n"
-            "- [단독] 태그 또는 특정 언론사만 보도한 기사는 exclusive: true\n\n"
-            "results에는 [제외 기준]과 [중복/후속 판단 기준]을 모두 통과한 항목만 포함한다.\n"
-            "submit_report 도구로 제출하라."
-        )
-
-    return "\n\n".join(sections)
 
 
 def _build_user_prompt(
@@ -362,14 +323,13 @@ def _build_user_prompt(
             facts_str = ", ".join(facts) if facts else "없음"
             created = h.get("created_at", "")[:10]
             lines.append(
-                f"- \"{h['title']}\" | {h['summary']} | key_facts: [{facts_str}] | "
-                f"{h['category']} | {created}"
+                f"- \"{h['title']}\" | {h['summary']} | key_facts: [{facts_str}] | {created}"
             )
         sections.append("\n".join(lines))
     else:
         sections.append(
             "[이전 보고 이력 - 최근 2일]\n"
-            "이력 없음. 모든 항목을 category: \"new\", prev_reference: \"\"로 설정하라."
+            "이력 없음."
         )
 
     # 시나리오 B: 기존 항목
@@ -433,6 +393,10 @@ def _parse_report_response(message, scenario: str) -> list[dict] | None:
             # 원본 데이터가 있는데 필터링 후 전부 소실 → 파싱 실패
             if not results and raw_results:
                 return None
+            # tool schema에서 제거된 필드에 기본값 주입 (DB 호환)
+            for r in results:
+                r.setdefault("category", "new")
+                r.setdefault("prev_reference", "")
             logger.info("브리핑 결과: %d건 (시나리오 %s)", len(results), scenario)
             return results
     # tool_use 블록 없음

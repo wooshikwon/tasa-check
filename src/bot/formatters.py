@@ -202,7 +202,6 @@ def format_report_header_b(department: str, date: str, total: int, modified: int
 
 def format_report_item(item: dict, scenario_b: bool = False) -> str:
     """브리핑 항목 1건을 Telegram HTML 메시지로 포맷팅한다."""
-    category = item.get("category", "")
     action = item.get("action", "")
 
     # 태그 결정
@@ -215,8 +214,6 @@ def format_report_item(item: dict, scenario_b: bool = False) -> str:
             tags.append("[수정]")
         elif action == "added":
             tags.append("[신규]")
-    if category == "follow_up":
-        tags.append("[후속]")
     tag = " ".join(tags)
 
     publisher = html_module.escape(item.get("publisher", ""))

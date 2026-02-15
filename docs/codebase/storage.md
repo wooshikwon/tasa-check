@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS journalists (
     keywords TEXT NOT NULL,          -- JSON 배열
     api_key TEXT NOT NULL,           -- Fernet 암호화된 값
     last_check_at DATETIME,
+    last_report_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 ```
@@ -36,10 +37,11 @@ CREATE TABLE IF NOT EXISTS journalists (
 | `keywords` | TEXT | NOT NULL | 모니터링 키워드 (JSON 배열로 직렬화) |
 | `api_key` | TEXT | NOT NULL | Anthropic API 키 (Fernet 암호화 상태로 저장) |
 | `last_check_at` | DATETIME | nullable | 마지막 /check 실행 시각 (UTC ISO 형식) |
+| `last_report_at` | DATETIME | nullable | 마지막 /report 실행 시각 (UTC ISO 형식) |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 최초 등록 시각 |
 
 - `telegram_id`에 UNIQUE 제약이 있어 한 사용자당 하나의 프로필만 존재한다.
-- `keywords`와 `department`를 변경하면 `last_check_at`이 NULL로 초기화된다 (이전 체크 기준이 무의미해지므로).
+- `keywords`와 `department`를 변경하면 `last_check_at`과 `last_report_at`이 모두 NULL로 초기화된다 (이전 체크/리포트 기준이 무의미해지므로).
 
 ### 1.2 report_cache
 
@@ -83,6 +85,8 @@ CREATE TABLE IF NOT EXISTS report_items (
     exclusive INTEGER DEFAULT 0,    -- [단독] 여부 (0/1)
     publisher TEXT DEFAULT '',      -- 언론사명
     pub_time TEXT DEFAULT '',       -- 배포 시각 (HH:MM)
+    key_facts TEXT DEFAULT '[]',   -- 핵심 팩트 JSON 배열
+    source_count INTEGER DEFAULT 1, -- 통합 출처 수
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -102,11 +106,13 @@ CREATE TABLE IF NOT EXISTS report_items (
 | `exclusive` | INTEGER | DEFAULT 0 | 단독 기사 여부 (0: 아님, 1: 단독) |
 | `publisher` | TEXT | DEFAULT '' | 언론사명 |
 | `pub_time` | TEXT | DEFAULT '' | 기사 배포 시각 (HH:MM 형식) |
+| `key_facts` | TEXT | DEFAULT '[]' | 핵심 팩트 목록 (JSON 배열로 직렬화) |
+| `source_count` | INTEGER | DEFAULT 1 | 통합 출처 수 (1이면 단독 출처, 2 이상이면 병합) |
 | `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 최초 저장 시각 |
 | `updated_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 마지막 갱신 시각 |
 
 - `report_cache_id`는 `report_cache(id)`에 대한 외래키다.
-- `reason`, `exclusive`, `publisher`, `pub_time` 4개 컬럼은 마이그레이션으로 추가된 컬럼이다 (1.6절 참조).
+- `reason`, `exclusive`, `publisher`, `pub_time`, `key_facts`, `source_count` 6개 컬럼은 마이그레이션으로 추가된 컬럼이다 (1.6절 참조).
 
 ### 1.4 reported_articles
 
@@ -176,6 +182,9 @@ _migrations = [
     "ALTER TABLE report_items ADD COLUMN exclusive INTEGER DEFAULT 0",
     "ALTER TABLE report_items ADD COLUMN publisher TEXT DEFAULT ''",
     "ALTER TABLE report_items ADD COLUMN pub_time TEXT DEFAULT ''",
+    "ALTER TABLE report_items ADD COLUMN key_facts TEXT DEFAULT '[]'",
+    "ALTER TABLE journalists ADD COLUMN last_report_at DATETIME",
+    "ALTER TABLE report_items ADD COLUMN source_count INTEGER DEFAULT 1",
 ]
 for sql in _migrations:
     try:
@@ -219,7 +228,7 @@ journalists (1) --< schedules (N)
 - `api_key`를 `encrypt_api_key()`로 암호화한 후 저장한다.
 - `keywords`를 `json.dumps()`로 JSON 문자열로 직렬화한다.
 - `INSERT ... ON CONFLICT(telegram_id) DO UPDATE SET`으로 upsert를 수행한다.
-- 갱신 시 `last_check_at`을 NULL로 초기화한다.
+- 갱신 시 `last_check_at`과 `last_report_at`을 NULL로 초기화한다.
 - 반환값: journalist `id` (INTEGER).
 
 #### `get_journalist(db, telegram_id) -> dict | None`
@@ -229,7 +238,7 @@ telegram_id로 기자 프로필 조회.
 - `SELECT *`로 전체 컬럼을 조회한다.
 - `api_key`를 `decrypt_api_key()`로 복호화하여 반환한다.
 - `keywords`를 `json.loads()`로 파싱하여 리스트로 반환한다.
-- 반환값: `{"id", "telegram_id", "department", "keywords", "api_key", "last_check_at", "created_at"}` 딕셔너리, 또는 None.
+- 반환값: `{"id", "telegram_id", "department", "keywords", "api_key", "last_check_at", "last_report_at", "created_at"}` 딕셔너리, 또는 None.
 
 #### `update_api_key(db, telegram_id, api_key) -> None`
 
@@ -243,17 +252,24 @@ API 키만 변경한다.
 키워드를 변경한다.
 
 - `json.dumps()`로 직렬화 후 UPDATE 수행.
-- `last_check_at`을 NULL로 초기화한다 (모니터링 기준이 바뀌었으므로).
+- `last_check_at`과 `last_report_at`을 NULL로 초기화한다 (모니터링 기준이 바뀌었으므로).
 
 #### `update_department(db, telegram_id, department) -> None`
 
 부서를 변경한다.
 
-- `last_check_at`을 NULL로 초기화한다 (부서가 바뀌면 기존 체크 기준이 무의미해지므로).
+- `last_check_at`과 `last_report_at`을 NULL로 초기화한다 (부서가 바뀌면 기존 체크/리포트 기준이 무의미해지므로).
 
 #### `update_last_check_at(db, journalist_id) -> None`
 
 마지막 /check 시각을 현재 UTC 시각으로 갱신한다.
+
+- `datetime.now(UTC).isoformat()`으로 현재 시각을 문자열로 변환하여 저장한다.
+- 인자가 `journalist_id`(INTEGER)인 점에 주의 (다른 함수들은 `telegram_id` 사용).
+
+#### `update_last_report_at(db, journalist_id) -> None`
+
+마지막 /report 시각을 현재 UTC 시각으로 갱신한다.
 
 - `datetime.now(UTC).isoformat()`으로 현재 시각을 문자열로 변환하여 저장한다.
 - 인자가 `journalist_id`(INTEGER)인 점에 주의 (다른 함수들은 `telegram_id` 사용).
@@ -298,7 +314,7 @@ Claude가 분석한 기사 클러스터들을 저장한다.
 - `tags`를 `json.loads()`로 파싱하여 반환한다.
 - `reason`, `exclusive`, `publisher`, `pub_time`은 마이그레이션 이전 데이터 호환을 위해 `r.keys()` 존재 여부를 확인한다.
 - `exclusive`는 정수(0/1)를 `bool()`로 변환하여 반환한다.
-- 반환값: 딕셔너리 리스트 `[{"id", "title", "url", "summary", "tags", "category", "prev_reference", "reason", "exclusive", "publisher", "pub_time"}, ...]`.
+- 반환값: 딕셔너리 리스트 `[{"id", "title", "url", "summary", "category", "prev_reference", "reason", "exclusive", "publisher", "pub_time", "key_facts", "source_count"}, ...]`.
 
 #### `save_report_items(db, report_cache_id, items) -> None`
 
@@ -309,12 +325,12 @@ report_items에 항목들을 저장한다.
 - `exclusive`는 `int()`로 변환하여 저장한다 (bool -> 0/1).
 - `created_at`과 `updated_at`은 함수 호출 시점의 UTC ISO 문자열.
 
-#### `update_report_item(db, item_id, summary, reason=None, exclusive=None, tags=None) -> None`
+#### `update_report_item(db, item_id, summary, reason=None, exclusive=None, key_facts=None) -> None`
 
 기존 report_item을 갱신한다. 시나리오 B에서 기존 아이템을 수정할 때 사용한다.
 
 - `summary`는 항상 갱신한다.
-- `reason`, `exclusive`, `tags`는 값이 전달된 경우에만 갱신한다 (None이면 건너뜀).
+- `reason`, `exclusive`, `key_facts`는 값이 전달된 경우에만 갱신한다 (None이면 건너뜀).
 - `updated_at`을 현재 UTC 시각으로 갱신한다.
 - 동적으로 UPDATE SET 절을 구성하여 필요한 필드만 갱신한다.
 
@@ -326,7 +342,7 @@ report_items에 항목들을 저장한다.
 - `report_cache`와 JOIN하여 `rc.journalist_id`와 `rc.date >= cutoff` 조건으로 필터링.
 - `cutoff`는 현재 UTC 시각에서 `days`만큼 뺀 값의 `"%Y-%m-%d"` 형식.
 - `ORDER BY ri.created_at DESC` (최신 순).
-- 반환값: 딕셔너리 리스트 `[{"title", "summary", "tags", "category", "created_at"}, ...]`.
+- 반환값: 딕셔너리 리스트 `[{"title", "summary", "category", "key_facts", "created_at"}, ...]`.
 
 #### `get_today_report_items(db, journalist_id) -> list[dict]`
 
@@ -465,6 +481,7 @@ API 키의 형식 검증(`sk-` 접두사 등)은 storage 계층이 아닌 bot �
 DB에 저장되는 DATETIME 값은 UTC ISO 8601 형식(`datetime.now(UTC).isoformat()`)으로 저장한다. 해당되는 컬럼:
 
 - `journalists.last_check_at`
+- `journalists.last_report_at`
 - `reported_articles.checked_at`
 - `report_cache.updated_at`
 - `report_items.created_at`, `report_items.updated_at`
@@ -487,7 +504,7 @@ KST 기준으로 처리하는 항목:
 
 `update_last_check_at()` 함수에서 `datetime.now(UTC).isoformat()`으로 현재 UTC 시각을 저장한다. /check 명령 실행이 완료된 후 호출된다.
 
-`last_check_at`이 NULL로 초기화되는 경우:
+`last_check_at`/`last_report_at`이 NULL로 초기화되는 경우:
 - `upsert_journalist()` 갱신 시 (프로필 전체 재등록)
 - `update_keywords()` 호출 시 (키워드 변경)
 - `update_department()` 호출 시 (부서 변경)

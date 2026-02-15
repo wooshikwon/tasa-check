@@ -72,7 +72,7 @@ async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 당일 재요청. delta_results에서 `action` 필드를 확인하여 기존 항목과 병합한다.
 
-- `action == "modified"`: 기존 항목의 summary, reason, exclusive, tags를 갱신
+- `action == "modified"`: 기존 항목의 summary, reason, exclusive, key_facts를 갱신
 - `action == "added"`: 신규 항목으로 추가
 - 변경 없는 기존 항목: `action = "unchanged"`로 표기
 
@@ -90,10 +90,10 @@ DB 반영:
 #### _run_check_pipeline()
 
 ```python
-async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, datetime, datetime]:
+async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, datetime, datetime, int]:
 ```
 
-반환: `(분석 결과 리스트, since, now)`. 기사가 없으면 결과는 `None`.
+반환: `(분석 결과 리스트, since, now, haiku_filtered)`. 기사가 없으면 결과는 `None`. `haiku_filtered`는 Haiku 사전 필터에서 제거된 기사 수.
 
 흐름:
 
@@ -104,11 +104,12 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
    ```python
    _SKIP_TITLE_TAGS = {"[포토]", "[사진]", "[영상]", "[동영상]", "[화보]", "[카드뉴스]", "[인포그래픽]"}
    ```
-5. **본문 수집**: `fetch_articles_batch(urls)` -- 기사 URL에서 첫 1~2문단 스크래핑
-6. **분석용 데이터 조립**: title, publisher, body, url, pubDate 필드로 구성
-7. **이전 체크 이력 로드**: `repo.get_recent_reported_articles(db, journalist["id"], hours=72)` -- 72시간 이내 이력
-8. **Claude 분석**: `analyze_articles()` 호출. api_key, articles, history, department, keywords 전달
-9. **인덱스 역매핑**: Claude가 반환한 `source_indices`, `merged_indices`(1-based)를 실제 URL, 언론사명으로 치환. `article_urls`, `merged_from`, `publisher`, `pub_time` 필드를 주입
+5. **Haiku 사전 필터**: `filter_check_articles()` -- 키워드 관련성 기반 사전 필터링 (제목+description만 사용)
+6. **본문 수집**: `fetch_articles_batch(urls)` -- Haiku 통과 기사만 스크래핑 (최대 800자)
+7. **분석용 데이터 조립**: title, publisher, body, url, pubDate 필드로 구성
+8. **이전 체크 이력 로드**: `repo.get_recent_reported_articles(db, journalist["id"], hours=72)` -- 72시간 이내 이력
+9. **Claude 분석**: `analyze_articles()` 호출 (Haiku, 5회 재시도). api_key, articles, history, department, keywords 전달
+10. **인덱스 역매핑**: Claude가 반환한 `source_indices`, `merged_indices`(1-based)를 실제 URL, 언론사명으로 치환. `url`, `publisher`, `pub_time`, `source_count` 필드를 주입
 
 #### _run_report_pipeline()
 
@@ -122,42 +123,24 @@ async def _run_report_pipeline(
 
 흐름:
 
-1. **시간 윈도우**: 고정 `REPORT_MAX_WINDOW_SECONDS` (3시간) 전부터 현재까지
+1. **시간 윈도우**: `last_report_at` 기반 적응형 (최대 `REPORT_MAX_WINDOW_SECONDS` 3시간). 첫 실행 시 고정 3시간
 2. **부서별 키워드 로드**: `DEPARTMENT_PROFILES`에서 `report_keywords` 추출. 부서명에 "부"가 없으면 자동 부착
-3. **네이버 API 수집**: `search_news(report_keywords, since, max_results=400)` -- check와 달리 최대 400건 상한
+3. **네이버 API 수집**: `search_news(report_keywords, since, max_results=300)` -- 최대 300건 상한
 4. **언론사 필터**: `filter_by_publisher()`
 5. **LLM 필터 (Haiku)**: `filter_articles()` -- 제목 + description 기반으로 Claude Haiku가 관련성 필터링
 6. **본문 수집**: `fetch_articles_batch(urls)`
 7. **분석용 데이터 조립**: check와 유사하나 `originallink`, `link` 필드를 추가로 포함
 8. **이전 report 이력**: `repo.get_recent_report_items(db, journalist["id"])` -- 2일치
 9. **Claude 분석**: `analyze_report_articles()` 호출. existing_items가 있으면(시나리오 B) 기존 항목 전달
-10. **인덱스 역매핑**: `source_indices`를 URL, publisher, pub_time으로 치환. URL은 네이버 뉴스 링크(`"naver"` 포함 여부)를 우선 사용
+10. **인덱스 역매핑**: `source_indices`를 url, publisher, pub_time, source_count로 치환. URL은 `src["link"]` (네이버 뉴스 URL) 사용. `item_id`는 순번→DB ID 변환
 
 ### 1.5 설정 변경 핸들러
 
-#### set_apikey_handler()
+`/set_apikey`, `/set_keyword`, `/set_schedule` 커맨드는 `src/bot/settings.py`의 `build_settings_handler()`가 생성하는 ConversationHandler에서 처리된다. 각 커맨드는 2단계(안내 -> 입력) 대화형으로 동작한다.
 
-```python
-async def set_apikey_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-```
-
-- 프로필 미등록 검사
-- 인자가 있으면(`context.args`): `sk-` 접두사 검증 후 `repo.update_api_key()` 호출
-- 보안: API 키가 포함된 사용자 메시지를 `update.message.delete()`로 삭제 시도
-- 삭제 후 `update.effective_chat.send_message()`로 확인 메시지 전송 (삭제된 메시지에는 reply 불가하므로 chat 직접 전송)
-- 인자가 없으면 사용법 안내
-
-#### set_keyword_handler()
-
-```python
-async def set_keyword_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-```
-
-- 프로필 미등록 검사
-- 인자 없으면 현재 키워드 표시 + 사용법 안내
-- 쉼표 구분 파싱, 빈 키워드 필터링
-- `repo.update_keywords()`로 저장
-- `repo.clear_check_data()`로 체크 이력 초기화 (키워드가 바뀌면 이전 이력이 무의미하므로)
+- `/set_apikey`: 현재 키 마스킹 표시 -> 새 키 입력 -> `sk-` 검증 -> 메시지 삭제 -> 저장
+- `/set_keyword`: 현재 키워드 표시 -> 새 키워드 입력 -> 저장 + 체크 이력 초기화
+- `/set_schedule`: 현재 스케줄 표시 -> 입력 (`check 09:00 12:00` 또는 `off`) -> 저장 + JobQueue 등록
 
 #### set_division_handler() / set_division_callback()
 
@@ -182,6 +165,25 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 - `repo.get_admin_stats(db)` 호출
 - 출력 항목: 전체 사용자 수, 부서별 인원, 스케줄 등록 현황(check/report 건수), 사용자 목록(부서, 키워드, 스케줄 수, 최근 check 시각)
 - last_check_at은 UTC를 KST로 변환하여 표시
+
+### 1.6b status_handler() -- 현재 설정 조회
+
+```python
+async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+```
+
+- 프로필 미등록 검사
+- 부서, 키워드, API Key(마스킹), check/report 스케줄을 표시
+
+### 1.6c format_error_message() -- 에러 메시지 변환
+
+Anthropic API 에러를 사용자 친화적 한국어 메시지로 변환하는 함수 (`src/bot/handlers.py`).
+- 529: 서버 과부하 (5회 재시도 실패)
+- 429: 요청 한도 초과
+- 401: API 키 유효하지 않음
+- 500+: 서버 오류
+- APIConnectionError: 연결 실패
+- APITimeoutError: 응답 시간 초과
 
 ### 1.7 에러 처리 방식
 
@@ -291,8 +293,7 @@ async def receive_api_key(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 /report - 부서 주요 뉴스 브리핑
 
 [자동 실행]
-/schedule - 예약 설정 (예: /schedule check 09:00 12:00)
-/schedule off - 예약 일괄 삭제
+/set_schedule - 예약 설정
 
 [설정 변경]
 /set_apikey - Claude API 키 변경
@@ -354,16 +355,12 @@ tag_map = {"exclusive": "[단독]", "breaking": "[속보]"}
 
 메시지 구조:
 ```html
-<b>[단독] [한국일보] 검찰, 대규모 비리 수사 착수 (14:30)</b>
-
-검찰이 대규모 비리 사건에 대한 본격 수사에 착수했다.
-
--> <i>자사 미보도 단독 기사로, 검찰 출입 기자 확인 필요</i>
-
-<a href="https://...">기사 원문</a>
+<b><a href="https://...">● [단독] [한국일보] 검찰, 대규모 비리 수사 착수 (14:30)</a></b>
+<blockquote expandable>검찰이 대규모 비리 사건에 대한 본격 수사에 착수했다.
+-> <i>자사 미보도 단독 기사로, 검찰 출입 기자 확인 필요</i></blockquote>
 ```
 
-- `article_urls` 리스트의 첫 번째 URL을 원문 링크로 사용
+- `url` 필드를 링크로 사용. 제목 전체가 하이퍼링크. `source_count > 1`이면 `[언론사 등 다수]` 표시
 - 메시지 길이가 `_MAX_MSG_LEN` (4096자) 초과 시 `msg[:4093] + "..."` 로 잘라냄
 
 #### format_no_results() / format_no_important()
@@ -374,7 +371,7 @@ tag_map = {"exclusive": "[단독]", "breaking": "[속보]"}
 #### format_skipped_articles()
 
 ```python
-def format_skipped_articles(skipped: list[dict]) -> str:
+def format_skipped_articles(skipped: list[dict], haiku_filtered: int = 0) -> list[str]:
 ```
 
 - `topic_cluster` 기준 중복 제거: 동일 `topic_cluster` 값을 가진 기사는 1건만 표시
@@ -479,13 +476,12 @@ Telegram 메시지 최대 길이 4096자를 초과하는 메시지를 잘라낸�
 
 자동 실행 스케줄 관리. `/schedule` 커맨드 핸들러, JobQueue 등록/해제, 자동 실행 콜백, 서버 재시작 복원을 담당한다.
 
-### 4.1 /schedule 핸들러 -- schedule_handler()
+### 4.1 /set_schedule 핸들러
 
-```python
-async def schedule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-```
+스케줄 관리는 `src/bot/settings.py`의 `build_settings_handler()`에서 `/set_schedule` ConversationHandler로 처리된다.
+2단계 대화: (1) 현재 스케줄 표시 + 입력 안내 (2) 사용자 입력 파싱 + 저장.
 
-파싱: `/schedule [command] [time1] [time2] ...`
+파싱: `[command] [time1] [time2] ...` 또는 `off`
 
 **인자 없음** (`/schedule`): 현재 설정 표시
 
@@ -507,9 +503,9 @@ async def schedule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 2. 시각 인자가 없으면 사용법 안내
 3. 실행 횟수 제한 검증:
    ```python
-   _MAX_TIMES = {"check": 60, "report": 3}
+   _MAX_TIMES = {"check": 30, "report": 30}
    ```
-   - check: 최대 60개/일, report: 최대 3개/일
+   - check: 최대 30개/일, report: 최대 30개/일
 4. 시각 형식 검증:
    ```python
    _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
@@ -518,7 +514,7 @@ async def schedule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 5. `repo.save_schedules()`로 DB 저장
 6. `unregister_jobs()`로 해당 command의 기존 잡 제거
 7. `register_job()`으로 각 시각별 잡 재등록
-8. 확인 메시지: `f"자동 {command} 설정 완료!\n매일 {times_str} (KST)에 자동 실행됩니다."`
+8. 확인 메시지: `f"자동 {command} 설정 완료!\n매일 {times_str}에 자동 실행됩니다."`
 
 ### 4.2 JobQueue 관리
 
@@ -569,8 +565,9 @@ JobQueue에서 호출되는 자동 check 실행. `check_handler()`와 동일한 
 - 메시지 전송에 `context.bot.send_message(chat_id=chat_id, ...)` 사용
 - 실행 시작 시 구분선 + 실행 시각 메시지 전송:
   ```
-  ─────
-  schedule 자동 실행 (2025-01-15 09:00:00 KST)
+  ━━━━━━━━━━━━━━━━━━━━
+  자동 타사체크
+  ━━━━━━━━━━━━━━━━━━━━
   ```
 - Lock이 이미 잠겨 있으면 무응답으로 건너뜀 (사용자에게 알리지 않음)
 - 에러 시 `"[자동 체크] 오류: {e}"` 메시지 전송
@@ -625,6 +622,17 @@ if os.environ.get("LANGFUSE_PUBLIC_KEY"):
 - 모든 Claude API 호출이 자동으로 Langfuse에 트레이싱됨
 - 환경변수가 없으면 트레이싱 없이 정상 동작
 
+### 5.1b post_init() -- 봇 명령어 메뉴 등록
+
+`post_init()`에서 `application.bot.set_my_commands()`로 텔레그램 봇 명령어 메뉴를 등록한다:
+- `/check` -- 키워드 기반 타사 체크
+- `/report` -- 부서 주요 뉴스 브리핑
+- `/status` -- 현재 설정 조회
+- `/set_schedule` -- 자동 실행 예약 설정
+- `/set_division` -- 부서 변경
+- `/set_keyword` -- 모니터링 키워드 변경
+- `/set_apikey` -- Claude API 키 변경
+
 ### 5.2 main() 함수
 
 ```python
@@ -648,12 +656,11 @@ def main() -> None:
 1. `build_conversation_handler()` -- `/start` 프로필 등록 (ConversationHandler)
 2. `CommandHandler("check", check_handler)` -- `/check`
 3. `CommandHandler("report", report_handler)` -- `/report`
-4. `CommandHandler("set_apikey", set_apikey_handler)` -- `/set_apikey`
-5. `CommandHandler("set_keyword", set_keyword_handler)` -- `/set_keyword`
-6. `CommandHandler("set_division", set_division_handler)` -- `/set_division`
-7. `CallbackQueryHandler(set_division_callback, pattern="^setdiv:")` -- 부서 변경 콜백
+4. `build_settings_handler()` -- `/set_keyword`, `/set_apikey`, `/set_schedule` (ConversationHandler)
+5. `CommandHandler("set_division", set_division_handler)` -- `/set_division`
+6. `CallbackQueryHandler(set_division_callback, pattern="^setdiv:")` -- 부서 변경 콜백
+7. `CommandHandler("status", status_handler)` -- `/status` 현재 설정 조회
 8. `CommandHandler("stats", stats_handler)` -- `/stats`
-9. `CommandHandler("schedule", schedule_handler)` -- `/schedule`
 
 ConversationHandler가 가장 먼저 등록되므로, `/start` 대화 진행 중에는 다른 커맨드 핸들러보다 ConversationHandler가 우선 처리된다.
 

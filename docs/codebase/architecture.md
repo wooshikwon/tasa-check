@@ -9,7 +9,7 @@ tasa-check는 기자를 위한 타사 뉴스 모니터링 텔레그램 봇이다
 기자가 자신의 Anthropic API 키를 `/start` 등록 과정에서 직접 입력한다. 키는 `src/storage/repository.py`의 `encrypt_api_key()` 함수로 Fernet 대칭 암호화하여 DB에 저장되며, LLM 호출 시 `decrypt_api_key()`로 복호화하여 사용한다. 이 구조로 개발자/운영자의 LLM 비용이 $0이 된다.
 
 - 암호화 키: 환경변수 `FERNET_KEY`에서 로드 (`src/config.py`)
-- 키 입력 메시지 보안: 입력 직후 `update.message.delete()` 호출로 텔레그램 채팅방에서 삭제 시도 (`src/bot/conversation.py:receive_api_key`, `src/bot/handlers.py:set_apikey_handler`)
+- 키 입력 메시지 보안: 입력 직후 `update.message.delete()` 호출로 텔레그램 채팅방에서 삭제 시도 (`src/bot/conversation.py:receive_api_key`, `src/bot/settings.py:receive_apikey`)
 
 ### 1.2 적응형 시간 윈도우
 
@@ -26,7 +26,7 @@ since = now - timedelta(seconds=window_seconds)
 - 첫 실행(`last_check_at`이 NULL)일 때도 최대값(3시간) 적용
 - 파이프라인 완료 후 `repo.update_last_check_at()`으로 현재 시각 갱신
 
-`/report`는 고정 윈도우를 사용한다: `REPORT_MAX_WINDOW_SECONDS = 10800` (3시간).
+`/report`도 적응형 시간 윈도우를 사용한다. `last_report_at` 기반으로 마지막 리포트 시각부터 현재까지의 범위를 동적으로 결정하며, 최대값은 `REPORT_MAX_WINDOW_SECONDS = 10800` (3시간)이다. 첫 실행(`last_report_at`이 NULL)일 때 최대값 적용.
 
 ### 1.3 비용 최적화
 
@@ -34,7 +34,7 @@ since = now - timedelta(seconds=window_seconds)
 
 1. 네이버 API로 기사 수집 (LLM 비용 $0)
 2. Haiku(`claude-haiku-4-5-20251001`)로 LLM 필터 1회 --- 제목+description만으로 부서 무관 기사 제거
-3. Sonnet(`claude-sonnet-4-5-20250929`)으로 분석 1회 --- 필터 통과 기사에 대해 본문 포함 분석
+3. Haiku(`claude-haiku-4-5-20251001`)로 분석 1회 --- 필터 통과 기사에 대해 본문 포함 분석 (5회 재시도, temperature 점진적 증가)
 
 두 LLM 호출 모두 `tool_choice={"type": "tool", "name": "..."}` 지정으로 강제 tool_use하여, 단일 턴에서 구조화된 응답을 받는다. 에이전트 루프(multi-turn)가 없으므로 토큰 누적이 발생하지 않는다.
 
@@ -67,9 +67,10 @@ src/
     report_agent.py         # /report LLM 필터 + 분석
   bot/
     conversation.py         # /start 프로필 등록 ConversationHandler
-    handlers.py             # /check, /report, /set_* 명령 핸들러
+    handlers.py             # /check, /report, /set_division, /status, /stats 핸들러
+    settings.py             # /set_keyword, /set_apikey, /set_schedule 설정 변경 ConversationHandler
     formatters.py           # 텔레그램 메시지 포맷팅
-    scheduler.py            # /schedule 핸들러 + JobQueue 관리
+    scheduler.py            # JobQueue 관리 + 자동 실행 콜백
 main.py                     # 진입점
 data/
   publishers.json           # 언론사 화이트리스트 (27개)
@@ -106,8 +107,8 @@ LLM 호출을 담당하는 분석 계층. Layer 0의 `config.py`와 Layer 1의 `
 
 | 모듈 | 역할 | 의존 |
 |------|------|------|
-| `src/agents/check_agent.py` | `/check` 기사 분석 (Sonnet 1회) | `config.DEPARTMENT_PROFILES`, Langfuse |
-| `src/agents/report_agent.py` | `/report` LLM 필터 (Haiku 1회) + 분석 (Sonnet 1회) | `config.DEPARTMENT_PROFILES`, `publisher.get_publisher_name`, Langfuse |
+| `src/agents/check_agent.py` | `/check` Haiku 사전 필터 + 분석 (Haiku 2회) | `config.DEPARTMENT_PROFILES`, Langfuse |
+| `src/agents/report_agent.py` | `/report` LLM 필터 (Haiku 1회) + 분석 (Haiku 1회, 5회 재시도) | `config.DEPARTMENT_PROFILES`, `publisher.get_publisher_name`, Langfuse |
 
 #### Layer 3 --- 봇
 
@@ -117,8 +118,9 @@ LLM 호출을 담당하는 분석 계층. Layer 0의 `config.py`와 Layer 1의 `
 |------|------|------|
 | `src/bot/formatters.py` | 텔레그램 HTML 메시지 생성 | (독립, 순수 포맷팅) |
 | `src/bot/conversation.py` | `/start` 프로필 등록 상태 머신 | `config.DEPARTMENTS`, `repository` |
-| `src/bot/handlers.py` | `/check`, `/report`, `/set_*`, `/stats` 핸들러 + 파이프라인 | `search`, `scraper`, `publisher`, `check_agent`, `report_agent`, `repository`, `formatters` |
-| `src/bot/scheduler.py` | `/schedule` 핸들러 + JobQueue 자동 실행 + 서버 재시작 복원 | `handlers._run_check_pipeline`, `handlers._run_report_pipeline`, `handlers._handle_report_scenario_*`, `repository`, `formatters` |
+| `src/bot/handlers.py` | `/check`, `/report`, `/set_division`, `/status`, `/stats` 핸들러 + 파이프라인 | `search`, `scraper`, `publisher`, `check_agent`, `report_agent`, `repository`, `formatters` |
+| `src/bot/settings.py` | `/set_keyword`, `/set_apikey`, `/set_schedule` 설정 변경 ConversationHandler | `repository`, `scheduler` |
+| `src/bot/scheduler.py` | JobQueue 자동 실행 콜백 + 서버 재시작 복원 | `handlers._run_check_pipeline`, `handlers._run_report_pipeline`, `handlers._handle_report_scenario_*`, `repository`, `formatters` |
 
 #### Layer 4 --- 진입점
 
@@ -134,6 +136,7 @@ Layer 4  main.py
 Layer 3  handlers.py ──── scheduler.py
            |     |            |
            |     +--- conversation.py
+           |     +--- settings.py
            |     +--- formatters.py
            |
 Layer 2  check_agent.py    report_agent.py
@@ -153,18 +156,19 @@ Layer 0  config.py  models.py  repository.py
 - 인증: `X-Naver-Client-Id` / `X-Naver-Client-Secret` 헤더 (환경변수 `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`)
 - 호출 위치: `src/tools/search.py`
 - 페이징: `_DISPLAY = 100` (1회 100건), `_MAX_PAGES = 2` (최대 2페이지 = 200건/키워드)
-- 총 상한: `/check` 기본 `max_results=200`, `/report`는 `max_results=400` 전달
+- 총 상한: `/check`는 `max_results=300`, `/report`도 `max_results=300` 전달
 - Rate limit 대응: `_BATCH_SIZE = 3` (동시 3개 키워드), `_BATCH_DELAY = 0.5`초 배치 간 대기, 429 발생 시 `_RETRY_MAX = 2`회 재시도 (지수 백오프 `_RETRY_DELAY * (attempt + 1)`)
 
 ### 3.2 Anthropic Claude API
 
-- 모델: Sonnet 4.5 (`claude-sonnet-4-5-20250929`) + Haiku 4.5 (`claude-haiku-4-5-20251001`)
+- 모델: Haiku 4.5 (`claude-haiku-4-5-20251001`) 단일 모델 사용
 - 인증: 기자 개인의 API 키 (BYOK)
 - 호출 방식: `tool_use` 강제 --- `tool_choice={"type": "tool", "name": "submit_analysis|submit_report|filter_news"}`
 - 호출 위치 및 모델:
-  - `src/agents/check_agent.py:analyze_articles` --- Sonnet 4.5, `max_tokens=16384`, `temperature=0.0`
+  - `src/agents/check_agent.py:filter_check_articles` --- Haiku 4.5, `max_tokens=2048`, `temperature=0.0`
+  - `src/agents/check_agent.py:analyze_articles` --- Haiku 4.5, `max_tokens=16384`, `temperature=0.0~0.4` (5회 재시도)
   - `src/agents/report_agent.py:filter_articles` --- Haiku 4.5, `max_tokens=2048`, `temperature=0.0`
-  - `src/agents/report_agent.py:analyze_report_articles` --- Sonnet 4.5, `max_tokens=16384`, `temperature=0.0`
+  - `src/agents/report_agent.py:analyze_report_articles` --- Haiku 4.5, `max_tokens=16384`, `temperature=0.0~0.4` (5회 재시도)
 
 ### 3.3 Telegram Bot API
 
@@ -179,7 +183,7 @@ Layer 0  config.py  models.py  repository.py
 - LLM 호출 모니터링 및 트레이싱
 - 환경변수 `LANGFUSE_PUBLIC_KEY`가 설정된 경우에만 활성화 (`main.py`에서 조건부 임포트)
 - `AnthropicInstrumentor().instrument()` --- Anthropic API 호출 자동 계측
-- 에이전트 내부에서 `langfuse.start_as_current_observation()` 스팬 생성 (이름: `check_agent`, `report_filter`, `report_agent`)
+- 에이전트 내부에서 `langfuse.start_as_current_observation()` 스팬 생성 (이름: `check_filter`, `check_agent`, `report_filter`, `report_agent`)
 
 ---
 
@@ -197,7 +201,7 @@ Layer 0  config.py  models.py  repository.py
     last_check_at 기반 적응형 since 결정 (최대 3시간)
     ↓
 [3] 네이버 뉴스 검색
-    search_news(journalist["keywords"], since) → raw_articles (최대 200건)
+    search_news(journalist["keywords"], since, max_results=300)
     ↓
 [4] 언론사 필터
     filter_by_publisher(raw_articles) → publishers.json 화이트리스트 매칭
@@ -206,18 +210,22 @@ Layer 0  config.py  models.py  repository.py
     _SKIP_TITLE_TAGS = {"[포토]", "[사진]", "[영상]", "[동영상]", "[화보]", "[카드뉴스]", "[인포그래픽]"}
     위 태그가 제목에 포함된 기사 제거
     ↓
-[6] 본문 스크래핑
-    fetch_articles_batch(urls) → 네이버 뉴스 URL에서 첫 3문단 추출
-    스크래핑 대상: a["link"] (네이버 뉴스 링크)
+[6] Haiku 사전 필터
+    filter_check_articles(api_key, articles, keywords, department)
+    키워드 관련성 기반 사전 필터링 (제목+description만 사용, 본문 스크래핑 전)
     ↓
-[7] Claude 분석
-    analyze_articles(api_key, articles, history, department, keywords) → Sonnet 4.5 1회 호출
+[7] 본문 스크래핑
+    fetch_articles_batch(urls) → 네이버 뉴스 URL에서 본문 추출 (최대 800자)
+    Haiku 통과 기사만 스크래핑
+    ↓
+[8] Claude 분석
+    analyze_articles(api_key, articles, history, department, keywords) → Haiku 4.5 호출 (5회 재시도)
     - history: repo.get_recent_reported_articles(hours=72) --- 최근 72시간 보고 이력
     - tool_use로 submit_analysis 도구 강제 호출
     - 응답: results(exclusive/important) + skipped(skip) 병합 반환
     ↓
-[8] 결과 역매핑 + 저장 + 전송
-    source_indices → article_urls, publisher, pub_time 주입
+[9] 결과 역매핑 + 저장 + 전송
+    source_indices → url, publisher, pub_time, source_count 주입
     repo.save_reported_articles() → DB 저장
     최신 기사 우선(pub_time desc) 정렬 후 텔레그램 전송
     last_check_at 갱신
@@ -244,8 +252,8 @@ Claude 시스템 프롬프트 구조 (`check_agent.py:_SYSTEM_PROMPT_TEMPLATE`):
     예: 사회부 → ["경찰 수사", "검찰 기소", "법원 판결", ...] (13개)
     ↓
 [2] 네이버 뉴스 검색
-    search_news(report_keywords, since, max_results=400) → 최대 400건
-    since = now - 3시간 (고정 윈도우)
+    search_news(report_keywords, since, max_results=300)
+    since = last_report_at 기반 적응형 (최대 3시간)
     ↓
 [3] 언론사 필터
     filter_by_publisher() → publishers.json 화이트리스트 매칭
@@ -261,13 +269,13 @@ Claude 시스템 프롬프트 구조 (`check_agent.py:_SYSTEM_PROMPT_TEMPLATE`):
     ↓
 [6] Claude 분석 (1회 호출)
     analyze_report_articles(api_key, articles, report_history, existing_items, department)
-    → Sonnet 4.5
+    → Haiku 4.5 (5회 재시도, temperature 점진적 증가)
     - report_history: repo.get_recent_report_items(days=2) --- 최근 2일 보고 이력
     - 시나리오 분기: existing_items 유무에 따라 A/B 시나리오
     - tool_use로 submit_report 도구 강제 호출
     ↓
 [7] 결과 역매핑 + 저장 + 전송
-    source_indices → url, publisher, pub_time 주입
+    source_indices → url, publisher, pub_time, source_count 주입
     URL은 a["link"] (네이버 뉴스 링크) 사용
 ```
 
@@ -301,10 +309,10 @@ SQLite (`aiosqlite`), 테이블 5개. DDL은 `src/storage/models.py`에 정의.
 
 | 테이블 | 용도 |
 |--------|------|
-| `journalists` | 기자 프로필 (telegram_id, department, keywords, api_key, last_check_at) |
+| `journalists` | 기자 프로필 (telegram_id, department, keywords, api_key, last_check_at, last_report_at) |
 | `reported_articles` | `/check` 분석 결과 (topic_cluster, key_facts, summary, article_urls, category, reason) |
 | `report_cache` | `/report` 당일 캐시 헤더 (journalist_id, date) --- 시나리오 A/B 판단용 |
-| `report_items` | `/report` 브리핑 항목 (title, url, summary, tags, category, reason, exclusive, publisher, pub_time) |
+| `report_items` | `/report` 브리핑 항목 (title, url, summary, tags, category, reason, exclusive, publisher, pub_time, key_facts, source_count) |
 | `schedules` | 자동 실행 예약 (journalist_id, command, time_kst) |
 
 [상세: storage.md]
@@ -333,9 +341,10 @@ _scrape_semaphore = asyncio.Semaphore(50)         # 전역 동시 스크래핑 5
 
 `main.py`에서 `LANGFUSE_PUBLIC_KEY` 환경변수 존재 시 `AnthropicInstrumentor().instrument()`로 Anthropic 호출을 자동 계측한다. 에이전트 내부에서 추가 스팬을 생성한다:
 
-- `check_agent`: `metadata={"department": department}`
+- `check_filter`: `metadata={"department": department, "input_count": len(articles)}`
+- `check_agent`: `metadata={"department": department, "attempt": attempt + 1}`
 - `report_filter`: `metadata={"department": department, "input_count": len(articles)}`
-- `report_agent`: `metadata={"department": department, "scenario": "A"|"B"}`
+- `report_agent`: `metadata={"department": department, "scenario": "A"|"B", "attempt": attempt + 1}`
 
 ### 6.3 일일 캐시 정리
 
@@ -364,11 +373,12 @@ await restore_schedules(application, db)
 
 ```python
 # src/bot/scheduler.py
-_MAX_TIMES = {"check": 60, "report": 3}
+_MAX_TIMES = {"check": 30, "report": 30}
 ```
 
-- `/schedule check`: 최대 60개 시각 등록 가능
-- `/schedule report`: 최대 3개 시각 등록 가능 (LLM 비용 고려)
+- `/set_schedule check`: 최대 30개 시각 등록 가능
+- `/set_schedule report`: 최대 30개 시각 등록 가능
+- 스케줄 관리는 `src/bot/settings.py`의 `build_settings_handler()`에서 `/set_schedule` ConversationHandler로 처리
 
 ### 6.6 관리자 기능
 
@@ -378,7 +388,7 @@ _MAX_TIMES = {"check": 60, "report": 3}
 
 ## 7. 부서 프로필 시스템
 
-`src/config.py`의 `DEPARTMENT_PROFILES` dict에 6개 부서가 정의되어 있다: 사회부, 정치부, 경제부, 산업부, 문화부, 스포츠부.
+`src/config.py`의 `DEPARTMENT_PROFILES` dict에 8개 부서가 정의되어 있다: 사회부, 정치부, 경제부, 산업부, 테크부, 문화부, 스포츠부, 국제부.
 
 각 부서 프로필 구조:
 
@@ -394,14 +404,14 @@ _MAX_TIMES = {"check": 60, "report": 3}
 
 ## 8. 본문 스크래핑 구조
 
-`src/tools/scraper.py`는 네이버 뉴스(`n.news.naver.com`) 기사 본문에서 첫 3문단을 추출한다.
+`src/tools/scraper.py`는 네이버 뉴스(`n.news.naver.com`) 기사 본문에서 최대 800자를 추출한다.
 
 - 본문 컨테이너: `article#dic_area` 또는 `div#newsct_article`
 - 문단 추출: `<p>` 태그에서 사진/이미지 래퍼 안의 캡션 제외
 - 소제목 필터링 (`_is_subheading`):
-  - `_SUBHEADING_MARKERS`: 특수 마커 문자 집합 (`"~#~#~#~#~#~#~#~#~#~#~#~#~#~#~#~#~#~#..."` 의미의 기호들: `"`, `"`, 등)
+  - `_SUBHEADING_MARKERS`: 특수 마커 문자 집합 (▶, ■, ◆, ● 등)
   - 전체 볼드 + 50자 미만 텍스트 = 소제목
-- 상한: `_MAX_PARAGRAPHS = 3`
+- 상한: `_MAX_CHARS = 800` (글자 수 기반, 문단 수 기반이 아님)
 
 배치 스크래핑 (`fetch_articles_batch`):
 - `httpx.AsyncClient` 공유로 연결 재사용
@@ -416,17 +426,18 @@ _MAX_TIMES = {"check": 60, "report": 3}
 
 ### /check 메시지
 
-- `format_check_header`: `"타사 체크 (시각 ~ 시각)\n주요 N건 (전체 M건 중)"`
-- `format_article_message`: `"[단독] [언론사] 제목 (HH:MM)\n\n요약\n\n-> 판단 근거\n\n기사 원문"`
-- `format_skipped_articles`: 스킵 기사 목록을 `<blockquote expandable>` 안에 표시. `topic_cluster` 기준 중복 제거.
+- `format_check_header`: 같은 날이면 시각만, 다른 날이면 날짜+시각 표시. `"타사 체크 (HH:MM ~ HH:MM)\n주요 N건 / 전체 M건"`
+- `format_article_message`: 제목 전체가 하이퍼링크. `● [단독] [언론사] 제목 (HH:MM)` 형태. 요약과 판단 근거는 `<blockquote expandable>` 안에 표시. `source_count > 1`이면 `[언론사 등 다수]` 표시
+- `format_skipped_articles(skipped, haiku_filtered)`: 스킵 기사 목록을 `<blockquote expandable>` 안에 표시. `topic_cluster` 기준 중복 제거. 반환형은 `list[str]` (4096자 초과 시 여러 메시지로 분할). `haiku_filtered`가 있으면 헤더에 표시
 
 ### /report 메시지
 
-- `format_report_header_a` (시나리오 A): `"OO부 주요 뉴스 (날짜) - 총 N건"`
-- `format_report_header_b` (시나리오 B): `"OO부 주요 뉴스 (날짜) - 총 N건 (수정 X건, 추가 Y건)"`
+- `format_report_header_a` (시나리오 A): `"OO부 주요 뉴스 (날짜)\n주요 N건"`
+- `format_report_header_b` (시나리오 B): `"OO부 주요 뉴스 (날짜)\n총 N건 (수정 X건, 추가 Y건)"`
 - `format_report_item`: 태그 표시 규칙 --- `[단독]`, `[수정]`/`[신규]` (시나리오 B), `[후속]` (follow_up)
+- `format_unchanged_report_items`: 시나리오 B에서 변경 없는 기존 항목을 `<blockquote expandable>` 안에 `기보고 N건` 형태로 표시
 
-모든 메시지는 `_MAX_MSG_LEN = 4096`자 초과 시 잘린다.
+모든 메시지는 `_MAX_MSG_LEN = 4096`자 초과 시 분할 또는 잘린다.
 
 ---
 

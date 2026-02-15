@@ -107,7 +107,17 @@ filtered = [
 
 사진/영상 등 분석 가치가 없는 기사를 제목 태그로 제거한다. 이 필터는 `_run_check_pipeline()` 내부에 인라인으로 구현되어 있다.
 
-### 1-7. 본문 스크래핑
+### 1-7. Haiku 사전 필터
+
+```python
+filtered = await filter_check_articles(journalist["api_key"], filtered, journalist["keywords"], journalist["department"])
+```
+
+`src/agents/check_agent.py`의 `filter_check_articles()` 함수로 키워드 관련성 기반 사전 필터링을 수행한다. 제목+description만으로 판단하여 키워드 무관 기사, 사진 캡션, 중복 사안을 제거한다. 본문 스크래핑 전 단계이므로 스크래핑 비용을 절감한다.
+
+**모델:** `claude-haiku-4-5-20251001` (temperature 0.0, max_tokens 2048)
+
+### 1-8. 본문 스크래핑
 
 ```python
 urls = [a["link"] for a in filtered]
@@ -126,7 +136,7 @@ bodies = await fetch_articles_batch(urls)
 1. `article#dic_area` 또는 `div#newsct_article` 컨테이너 탐색
 2. `<p>` 태그에서 문단 추출 (사진/이미지 래퍼 내 캡션 제외)
 3. 소제목 판별: `_SUBHEADING_MARKERS` 특수문자(▶, ■ 등)로 시작하거나, 전체가 볼드인 짧은(50자 미만) 텍스트
-4. 최대 3문단(`_MAX_PARAGRAPHS`)까지 추출
+4. 총 글자 수가 800자(`_MAX_CHARS`)에 도달하면 수집 중단
 5. `<p>` 태그가 없으면 컨테이너의 직접 텍스트를 줄바꿈 기준으로 분리하여 같은 규칙 적용
 
 **반환값:** `dict[str, str | None]` — URL을 키, 본문 텍스트(또는 None)를 값으로 하는 딕셔너리
@@ -189,7 +199,7 @@ results = await analyze_articles(
 
 `src/agents/check_agent.py`의 `analyze_articles()` 함수를 호출한다.
 
-**모델:** `claude-sonnet-4-5-20250929` (temperature 0.0, max_tokens 16384)
+**모델:** `claude-haiku-4-5-20251001` (temperature 0.0~0.4, max_tokens 16384, 5회 재시도)
 
 **시스템 프롬프트 구성** (`_build_system_prompt()`):
 - `DEPARTMENT_PROFILES`에서 부서별 `coverage`, `criteria`를 주입
@@ -222,8 +232,12 @@ for r in results:
     merged = r.pop("merged_indices", [])
     valid_sources = [i for i in sources if 1 <= i <= n]
     valid_merged = [i for i in merged if 1 <= i <= n]
-    r["article_urls"] = [articles_for_analysis[i - 1]["url"] for i in valid_sources]
-    r["merged_from"] = [articles_for_analysis[i - 1]["url"] for i in valid_merged]
+    r["source_count"] = len(valid_sources) + len(valid_merged)
+    if valid_sources:
+        src = articles_for_analysis[valid_sources[0] - 1]
+        r["url"] = src["url"]
+        r["publisher"] = src["publisher"]
+        r["title"] = src["title"]
     # 첫 번째 source에서 publisher, pub_time 추출
 ```
 
@@ -301,14 +315,14 @@ now = datetime.now(UTC)
 since = now - timedelta(seconds=REPORT_MAX_WINDOW_SECONDS)
 ```
 
-`REPORT_MAX_WINDOW_SECONDS`는 `3 * 60 * 60` (3시간)으로 고정. /check와 달리 `last_check_at` 기반이 아니라 항상 고정 3시간 윈도우를 사용한다.
+/report도 적응형 시간 윈도우를 사용한다. `last_report_at`이 있으면 마지막 리포트 시점부터 현재까지, 최대 `REPORT_MAX_WINDOW_SECONDS` (3시간). `last_report_at`이 None(첫 사용)이면 고정 3시간.
 
 ### 2-4. 부서 키워드로 네이버 검색
 
 ```python
 profile = DEPARTMENT_PROFILES.get(dept_label, {})
 report_keywords = profile.get("report_keywords", [])
-raw_articles = await search_news(report_keywords, since, max_results=400)
+raw_articles = await search_news(report_keywords, since, max_results=300)
 ```
 
 `src/config.py`의 `DEPARTMENT_PROFILES`에서 부서별 `report_keywords`를 가져온다. 예를 들어 사회부는:
@@ -398,8 +412,8 @@ report_history = await repo.get_recent_report_items(db, journalist["id"])
 {
     "title": str,
     "summary": str,
-    "tags": list[str],    # JSON 파싱
     "category": str,       # "follow_up" / "new"
+    "key_facts": list[str], # JSON 파싱된 핵심 팩트 배열
     "created_at": str,
 }
 ```
@@ -433,21 +447,21 @@ results = await analyze_report_articles(
 
 `src/agents/report_agent.py`의 `analyze_report_articles()` 함수를 호출한다.
 
-**모델:** `claude-sonnet-4-5-20250929` (temperature 0.0, max_tokens 16384)
+**모델:** `claude-haiku-4-5-20251001` (temperature 0.0~0.4, max_tokens 16384, 5회 재시도)
 
 **시스템 프롬프트 구성** (`_build_system_prompt()`):
 - 부서별 취재 영역, 판단 기준, 단독 식별 기준, 제외 기준, 요약 작성 기준을 포함
 - 시나리오 A/B에 따라 출력 규칙이 달라짐 (3장에서 상세 설명)
 
 **사용자 프롬프트 구성** (`_build_user_prompt()`):
-- `[이전 보고 이력 - 최근 2일]`: title, summary, tags, category, created_at
-- 시나리오 B일 때 `[오늘 기존 캐시 항목]`: id, title, summary, tags
+- `[이전 보고 이력 - 최근 2일]`: title, summary, key_facts, category, created_at
+- 시나리오 B일 때 `[오늘 기존 항목]`: 항목순번, title, summary, key_facts
 - `[수집된 기사 목록]`: 번호 + [언론사] + 제목 + 본문 + 시각
 
 **LLM 호출 방식:** tool_use 강제 (`tool_choice: {"type": "tool", "name": "submit_report"}`)
 
 **`submit_report` 도구 스키마:**
-- `results` 배열: `{action, item_id, title, url, source_indices, summary, reason, tags, category, exclusive, prev_reference}`
+- `results` 배열: `{action, item_id, title, source_indices, summary, reason, key_facts, category, exclusive, prev_reference}` (action/item_id는 시나리오 B 전용)
   - action: `"modified"` (기존 수정) / `"added"` (신규) — 시나리오 B 전용
   - category: `"follow_up"` (후속) / `"new"` (신규)
 
@@ -522,12 +536,12 @@ LLM이 반환한 `delta_results`에 대해:
 1. **action 보정:** action 필드가 없는 항목에 `"added"` 기본값 부여
 2. **modified 항목 매핑:** `item_id`로 기존 항목과 대조
 3. **merged_items 리스트 조립:**
-   - 기존 항목 중 수정된 것: 새 summary, reason, exclusive, tags로 갱신 + `action: "modified"`
+   - 기존 항목 중 수정된 것: 새 summary, reason, exclusive, key_facts로 갱신 + `action: "modified"`
    - 기존 항목 중 변경 없는 것: `action: "unchanged"`
    - 신규 추가: `action: "added"`
 4. **DB 반영:**
    - 추가 항목: `repo.save_report_items()`
-   - 수정 항목: `repo.update_report_item()` (summary, reason, exclusive, tags 갱신)
+   - 수정 항목: `repo.update_report_item()` (summary, reason, exclusive, key_facts 갱신)
 5. **정렬 및 전송:**
    - 2단계 안정 정렬: 1) pub_time 역순 → 2) action 그룹 순 (modified/added 먼저, unchanged 뒤)
    - `format_report_header_b()`: 총 건수, 수정 N건, 추가 N건 표시
@@ -641,11 +655,10 @@ search_news(report_keywords, max_results=400)
     "action": "added",          # 시나리오 B에서만 의미
     "item_id": null,
     "title": "기사 제목",
-    "url": "https://...",
     "source_indices": [2, 5],
     "summary": "요약 2~3줄",
     "reason": "선택 사유",
-    "tags": ["수사", "검찰"],
+    "key_facts": ["팩트1", "팩트2"],
     "category": "new",           # "follow_up" / "new"
     "exclusive": false,
     "prev_reference": null,      # follow_up이면 "2025-01-15 \"이전 제목\""
