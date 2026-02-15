@@ -92,11 +92,11 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
     if not filtered:
         return None, since, now, 0
 
-    # Haiku 사전 필터 (키워드 관련성)
+    # Haiku 사전 필터 (부서 관련성)
     pre_filter_count = len(filtered)
     filtered = await filter_check_articles(
         journalist["api_key"], filtered,
-        journalist["keywords"], journalist["department"],
+        journalist["department"],
     )
     haiku_filtered = pre_filter_count - len(filtered)
     if not filtered:
@@ -430,14 +430,12 @@ async def _handle_report_scenario_b(
     for existing in existing_items:
         mod = delta_by_item_id.get(existing["id"])
         if mod:
-            # 수정된 항목: 새 요약 + reason/exclusive/key_facts 갱신
+            # 수정된 항목: 새 요약 + reason/exclusive 갱신
             merged = {**existing, "summary": mod["summary"], "action": "modified"}
             if mod.get("reason"):
                 merged["reason"] = mod["reason"]
             if "exclusive" in mod:
                 merged["exclusive"] = mod["exclusive"]
-            if mod.get("key_facts"):
-                merged["key_facts"] = mod["key_facts"]
             merged_items.append(merged)
             modified_ids.add(existing["id"])
         else:
@@ -456,7 +454,6 @@ async def _handle_report_scenario_b(
             db, item_id, mod["summary"],
             reason=mod.get("reason"),
             exclusive=mod.get("exclusive"),
-            key_facts=mod.get("key_facts"),
         )
 
     # 변경 건수 계산

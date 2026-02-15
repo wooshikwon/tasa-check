@@ -308,11 +308,10 @@ async def update_report_item(
     summary: str,
     reason: str | None = None,
     exclusive: bool | None = None,
-    key_facts: list[str] | None = None,
 ) -> None:
     """기존 report_item을 갱신한다. 시나리오 B [수정] 처리용.
 
-    summary는 항상 갱신. reason/exclusive/key_facts는 값이 전달된 경우만 갱신.
+    summary는 항상 갱신. reason/exclusive는 값이 전달된 경우만 갱신.
     """
     now = datetime.now(UTC).isoformat()
     fields = ["summary = ?", "updated_at = ?"]
@@ -323,9 +322,6 @@ async def update_report_item(
     if exclusive is not None:
         fields.append("exclusive = ?")
         params.append(int(exclusive))
-    if key_facts is not None:
-        fields.append("key_facts = ?")
-        params.append(json.dumps(key_facts, ensure_ascii=False))
     params.append(item_id)
     await db.execute(
         f"UPDATE report_items SET {', '.join(fields)} WHERE id = ?",

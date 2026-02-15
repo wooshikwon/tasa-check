@@ -51,7 +51,7 @@ async def filter_articles(
     """Haiku LLM으로 부서 관련 기사를 필터링한다.
 
     본문 스크래핑 전에 제목+description만으로 판단하여
-    부서 무관 기사, 사진 캡션, 중복 사안을 제거한다.
+    부서 무관 기사, 사진 캡션, 명백한 홍보성 기사를 제거한다.
 
     Args:
         api_key: Anthropic API 키
@@ -83,7 +83,7 @@ async def filter_articles(
         "아래 기사 목록에서 다음 기준으로 기사 번호를 선별하세요:\n"
         "1. 부서 관련성: 해당 부서 취재 영역에 해당하는 기사만 포함\n"
         "2. 사진 캡션 제외: 본문 없이 사진 설명만 있는 포토뉴스 제외\n"
-        "3. 중복 사안 정리: 같은 사안의 다수 기사 중 정보가 가장 풍부한 기사(최대 3건)만 선별\n"
+        "3. 명백한 홍보성 제외: 보도자료를 그대로 옮긴 제품·서비스 출시 소개, 기업·기관의 자체 수상·CSR 활동 홍보, 할인·이벤트 안내 등. 단, 대규모 투자·M&A·정책 변화를 수반하는 발표는 제외하지 않는다\n"
         "4. 애매한 경우 포함 쪽으로 판단\n\n"
         "filter_news 도구로 선별된 기사 번호를 제출하세요."
     )
@@ -150,11 +150,6 @@ def _build_report_tool(is_scenario_b: bool) -> dict:
             "type": "string",
             "description": "results 포함 사유 1문장 (왜 데스크가 알아야 하는지)",
         },
-        "key_facts": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "당일 새로 발생/확인된 핵심 팩트 배열",
-        },
         "exclusive": {
             "type": "boolean",
             "description": "[단독] 태그 또는 특정 언론사만 보도한 기사이면 true",
@@ -162,7 +157,7 @@ def _build_report_tool(is_scenario_b: bool) -> dict:
     }
     required = [
         "title", "source_indices", "summary",
-        "reason", "key_facts", "exclusive",
+        "reason", "exclusive",
     ]
 
     if is_scenario_b:
@@ -202,58 +197,46 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 당신은 {dept_label} 데스크의 뉴스 브리핑 보조입니다.
 오늘 날짜: {today}
 아래 지시사항은 절대적 규칙이다. 자의적 해석이나 예외 판단 없이 각 단계를 문자 그대로 준수하라.
-아래 제공된 기사 목록을 분석하여 데스크가 주목할 사안을 선별하고 요약합니다.
+아래 제공된 기사 목록을 분석하여 데스크가 주목할 사안을 선별하고 요약하라.
 
-[취재 영역 - {dept_label}]
-{coverage_section}
+[1단계: 뉴스가 아닌 것은 제외]
+기사 원문에 "N일 A가 OO했다" 등 특정 주체의 오늘({today}) 행위가 명시된 경우만 뉴스다. 뉴스가 아니면 results에 포함하지 않는다.
+  1-1) 단, 오늘자 외신 인용("N일 로이터/NYT가 보도했다")은 출처가 명확한 당일 뉴스로 인정한다.
+  1-2) "N일 A가 OO했다" 형식이 확인되지 않는 종합·분석·해설 기사는 절대 뉴스가 아니므로 skip 처리한다.
 
-[1단계: 뉴스 판단]
-기사 원문에 "N일 A가 OO했다" 등 특정 주체의 오늘({today}) 행위가 명시된 경우만 뉴스다.
-  - 단, 외신 인용("N일 로이터/NYT가 보도했다")은 출처가 명확한 당일 뉴스로 인정한다.
-  - "현상이 심화되고 있다", "경쟁이 본격화하고 있다" 등 진행형 트렌드 서술은 사건이 아니다.
-  - 위 기준을 충족하지 못하는 종합·분석·해설 기사는 절대 뉴스가 아니므로 results에 포함하지 않는다.
-
-[2단계: 뉴스 가치 판단]
-1단계를 통과한 기사에 대해, 데스크가 반드시 알아야 할 가치가 있는지 판단한다.
+[2단계: 뉴스 가치가 부족하면 제외]
 다음에 하나라도 해당하면 가치 없음으로 results에 포함하지 않는다:
-  1) 단발성 사건·사고: 후속 보도 가능성이 낮은 단순 추락, 사망, 교통사고, 화재, 소규모 지진 등 개별 사건
-  2) 단순 현황·통계·트렌드 발표: 정부 부처/기업 보도자료, 특정 기간 내 수치를 집계한 트렌드 통계 보도
-  3) 단순 반응·환영·규탄: 법안 통과에 대한 지자체 환영, 성명 발표 등 자체 뉴스 가치 없는 반응
-  4) 인터뷰·칼럼·사설: 기자 의견, 전문가 인터뷰 기사
-  5) 연예·스포츠 가십: 부서 취재 영역과 무관한 연예인·선수 사생활
+  2-1) 단발성 사건·사고: 후속 보도 가능성이 낮은 단순 추락, 사망, 교통사고, 화재, 소규모 지진 등 개별 사건
+  2-2) 단순 현황·통계·트렌드 발표: 정부 부처/기업 보도자료, 특정 기간 내 수치를 집계한 트렌드 통계 보도
+  2-3) 단순 반응·환영·규탄: 법안 통과에 대한 지자체 환영, 성명 발표 등 자체 뉴스 가치 없는 반응
+  2-4) 인터뷰·칼럼·사설: 기자 의견, 전문가 인터뷰 기사
+  2-5) 연예·스포츠 가십: 부서 취재 영역과 무관한 연예인·선수 사생활
 
-results 포함 기준 — 위 기사를 제외한 나머지 중 아래를 충족하는 것만 results에 포함:
-  - 기사 원문에 "N일 A가 OO했다" 등 특정 주체의 오늘({today}) 행위가 명시되어 있을 것
-  - 복수 언론이 보도하거나, 단독 보도라면 팩트의 무게가 충분할 것
-  - 단발성 내용이 아니며, 뉴스 가치 판단에 비추어 사안이 중대해 후속 보도 가능성이 높을 것
+[3단계: 보고 이력 중복 제외]
+이전에 보고한 이력과 중복된 주제의 기사는 다시 보고하지 않는다:
+  3-1) 이미 보고한 기사와 육하원칙(누가, 언제, 어디서, 무엇을)의 핵심 사실이 동일하면 재보고 절대 금지. 반드시 results에 포함하지 않는다.
+  3-2) 현재 기사에 새로운 관점, 업계 반응, 추가적인 사실이 존재하더라도, 이전 보고한 기사와 핵심 육하원칙이 동일하면 절대 results에 포함하지 않는다.
 
-부서별 주요 기사 기준 — {dept_label} 데스크가 반드시 알아야 할 핵심 사안만 엄선:
-{criteria_section}
+[4단계: results 분류 판단]
+위 제외 대상이 아닌 기사 중 아래를 충족하는 것만 results에 포함:
+  4-1) 기사 원문에 "N일 A가 OO했다" 등 특정 주체의 오늘({today}) 행위가 명시되어 있을 것
+  4-2) 복수 언론이 보도하거나, 단독 보도라면 팩트의 무게가 충분할 것
+  4-3) 단발성 내용이 아니며, 뉴스 가치 판단에 비추어 사안이 중대해 '후속 보도 가능성'이 높을 것
 
-위 유형에 해당하는 기사는 reason이 그럴듯해도 반드시 results에 포함하지 않는다. 예외 없이 적용된다.
-reason에는 왜 데스크가 이 사안을 알아야 하는지만 기재한다. '당일 보도', '오늘 뉴스' 등 당연한 사실은 쓰지 않는다.
-
-[3단계: 이전 보고 대비]
-  - 이전에 보고한 기사와 육하원칙(누가, 언제, 어디서, 무엇을)의 핵심 사실이 동일하면 무조건 results에 포함하지 않는다.
-  - 새로운 관점, 추가 수치, 업계 반응, 다른 언론사의 해석 등은 새로운 뉴스가 아니다 — 예외 없다.
-
-[4단계: 동일 사안 병합]
-같은 사안의 여러 언론사 기사는 source_indices로 묶어 1건으로 보고한다.
-  예) 'A 사건' 일반 보도 3건 → 1건으로 병합 (source_indices: [1, 2, 3])
-
-[5단계: 단독 식별]
-[단독] 태그가 있는 기사는 항상 results에 포함한다.
+[5단계: 동일 사안 병합 원칙]
+분류 기준을 충족한 기사들을 results에 포함할 때, 동일 사안은 병합한다:
+  5-1) 같은 사안의 여러 언론사 기사는 source_indices로 묶어 1건으로 보고한다.
+  5-2) 단, [단독] 기사는 별도 분류한다
   예) 'A 사건' 일반 보도 3건 + [단독] 1건 → 병합 1건 + [단독] 별도 1건
 
-[summary·key_facts 작성 기준]
-summary: 기사 원문의 행위 주체와 시점을 육하원칙 스트레이트 형식으로 2~3문장 이내에 작성.
+[summary 작성 기준]
+기사 원문의 행위 주체와 시점을 육하원칙 스트레이트 형식으로 2~3문장 이내에 작성.
   - 당일 발생한 사실만 요약. 기사 내 과거 경위·배경은 포함하지 않는다
     예) "A가 14일 어디서 B를 발표했다. 앞서 7일 C가 있었다" → 14일 발표만 요약
   - 인물명, 기관명, 장소, 수치, 일시 등 구체적 팩트 포함
   - "N일 보도되었다/알려졌다"는 쓰지 않는다. 원문의 행위 주체와 시점만 기술한다
     예) "A사가 14일 매출 N% 증가를 공시했다", "미 상무부가 14일 제재 검토를 밝혔다(로이터 보도)"
   - LLM의 해석·평가·전망 금지. 판단은 reason 필드에만 기재
-key_facts: 당일 새로 발생/확인된 팩트만 기록한다. 기사 내 과거 경위는 넣지 않는다.
 
 {output_rules_section}"""
 
@@ -287,10 +270,6 @@ def _build_system_prompt(
 ) -> str:
     """시스템 프롬프트를 조립한다."""
     dept_label = _dept_label(department)
-    profile = DEPARTMENT_PROFILES.get(dept_label, {})
-    coverage_section = profile.get("coverage", "")
-    criteria = profile.get("criteria", [])
-    criteria_section = "\n".join(f"- {c}" for c in criteria)
 
     is_scenario_b = existing_items is not None and len(existing_items) > 0
     output_rules_section = _OUTPUT_RULES_B if is_scenario_b else _OUTPUT_RULES_A
@@ -299,8 +278,6 @@ def _build_system_prompt(
     return _SYSTEM_PROMPT_TEMPLATE.format(
         dept_label=dept_label,
         today=today,
-        coverage_section=coverage_section,
-        criteria_section=criteria_section,
         output_rules_section=output_rules_section,
     )
 
@@ -321,18 +298,16 @@ def _build_user_prompt(
 
     # 이전 보고 이력
     if report_history:
-        lines = ["[이전 보고 이력 - 최근 2일]"]
+        lines = ["[이전 뉴스 브리핑 이력 - 최근 2일]"]
         for h in report_history:
-            facts = h.get("key_facts", [])
-            facts_str = ", ".join(facts) if facts else "없음"
             created = h.get("created_at", "")[:10]
             lines.append(
-                f"- \"{h['title']}\" | {h['summary']} | key_facts: [{facts_str}] | {created}"
+                f"- \"{h['title']}\" | {h['summary']} | {created}"
             )
         sections.append("\n".join(lines))
     else:
         sections.append(
-            "[이전 보고 이력 - 최근 2일]\n"
+            "[이전 뉴스 브리핑 이력 - 최근 2일]\n"
             "이력 없음."
         )
 
@@ -341,11 +316,8 @@ def _build_user_prompt(
     if is_scenario_b:
         lines = ["[오늘 기존 항목]"]
         for seq, item in enumerate(existing_items, 1):
-            facts = item.get("key_facts", [])
-            facts_str = ", ".join(facts) if facts else "없음"
             lines.append(
-                f"- 항목{seq} | {item['title']} | 요약: {item['summary']} "
-                f"| key_facts: [{facts_str}]"
+                f"- 항목{seq} | {item['title']} | 요약: {item['summary']}"
             )
         sections.append("\n".join(lines))
 
