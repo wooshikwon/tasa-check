@@ -133,6 +133,7 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
     )
 
     # Claude는 기사 번호(index)만 반환 → 원본 데이터에서 URL, 언론사를 주입
+    # LLM이 source_indices를 잘못 부여할 수 있으므로 제목 기반 매칭을 우선 시도
     if results:
         n = len(articles_for_analysis)
         for r in results:
@@ -142,11 +143,22 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
             valid_merged = [i for i in merged if 1 <= i <= n]
 
             r["source_count"] = len(valid_sources) + len(valid_merged)
-            if valid_sources:
+
+            llm_title = r.get("title", "")
+            matched = next((a for a in articles_for_analysis if a["title"] == llm_title), None)
+
+            if matched:
+                r["url"] = matched["url"]
+                r["publisher"] = matched["publisher"]
+                r["title"] = matched["title"]
+                r["source_count"] = max(r["source_count"], 1)
+                pub_date = matched.get("pubDate", "")
+                r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
+            elif valid_sources:
                 src = articles_for_analysis[valid_sources[0] - 1]
                 r["url"] = src["url"]
                 r["publisher"] = src["publisher"]
-                r["title"] = src["title"]  # 원본 기사 제목 강제
+                r["title"] = src["title"]
                 pub_date = src.get("pubDate", "")
                 r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
             else:
@@ -232,6 +244,7 @@ async def _run_report_pipeline(
     )
 
     # source_indices → URL, 언론사, 배포시각, 원본 제목 역매핑
+    # LLM이 source_indices를 잘못 부여할 수 있으므로 제목 기반 매칭을 우선 시도
     if results:
         n = len(articles_for_analysis)
         # 순번→DB ID 매핑 (시나리오 B)
@@ -247,11 +260,22 @@ async def _run_report_pipeline(
             source_indices = r.pop("source_indices", [])
             valid_sources = [i for i in source_indices if 1 <= i <= n]
             r["source_count"] = len(valid_sources)
-            if valid_sources:
+
+            llm_title = r.get("title", "")
+            matched = next((a for a in articles_for_analysis if a["title"] == llm_title), None)
+
+            if matched:
+                r["url"] = matched["link"]
+                r["publisher"] = matched["publisher"]
+                r["title"] = matched["title"]
+                r["source_count"] = max(r["source_count"], 1)
+                pub_date = matched.get("pubDate", "")
+                r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
+            elif valid_sources:
                 src = articles_for_analysis[valid_sources[0] - 1]
                 r["url"] = src["link"]
                 r["publisher"] = src["publisher"]
-                r["title"] = src["title"]  # 원본 기사 제목 강제
+                r["title"] = src["title"]
                 pub_date = src.get("pubDate", "")
                 r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
             else:
