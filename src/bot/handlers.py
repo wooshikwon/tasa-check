@@ -2,11 +2,95 @@
 
 import asyncio
 import logging
+import re
 from datetime import UTC, datetime, timedelta, timezone
 
 import anthropic
 
 _KST = timezone(timedelta(hours=9))
+
+# 제목 정규화: 대괄호 태그 제거, 연속 공백 축소
+_TITLE_BRACKET_RE = re.compile(r"\[[^\]]*\]\s*")
+
+
+def _normalize_title(title: str) -> str:
+    """매칭용 제목 정규화. [단독] 등 태그 제거, 공백 축소, 앞뒤 공백 제거."""
+    return _TITLE_BRACKET_RE.sub("", title).strip()
+
+
+def _match_article(llm_title: str, articles: list[dict]) -> dict | None:
+    """LLM이 반환한 제목으로 원본 기사를 매칭한다.
+
+    1순위: 정확 일치
+    2순위: 정규화 후 일치 (대괄호 태그 제거 등)
+    3순위: 한쪽이 다른 쪽에 포함 (substring)
+    """
+    if not llm_title:
+        return None
+
+    # 1순위: 정확 일치
+    for a in articles:
+        if a["title"] == llm_title:
+            return a
+
+    # 2순위: 정규화 후 일치
+    norm_llm = _normalize_title(llm_title)
+    if norm_llm:
+        for a in articles:
+            if _normalize_title(a["title"]) == norm_llm:
+                return a
+
+    # 3순위: substring (짧은 쪽이 긴 쪽에 포함, 최소 15자 이상일 때만)
+    if len(norm_llm) >= 15:
+        for a in articles:
+            norm_a = _normalize_title(a["title"])
+            if norm_a and (norm_llm in norm_a or norm_a in norm_llm):
+                return a
+
+    return None
+
+
+def _map_results_to_articles(
+    results: list[dict],
+    articles: list[dict],
+    url_key: str = "url",
+) -> None:
+    """LLM 결과에 원본 기사의 URL, 언론사, 시각을 매핑한다.
+
+    title 기반 매칭을 우선하고, 실패 시 source_indices 폴백을 사용하되
+    폴백에서는 title을 덮어쓰지 않아 summary와의 일관성을 유지한다.
+    """
+    n = len(articles)
+    for r in results:
+        sources = r.pop("source_indices", [])
+        merged = r.pop("merged_indices", [])
+        valid_sources = [i for i in sources if 1 <= i <= n]
+        valid_merged = [i for i in merged if 1 <= i <= n]
+
+        r["source_count"] = len(valid_sources) + len(valid_merged)
+
+        llm_title = r.get("title", "")
+        matched = _match_article(llm_title, articles)
+
+        if matched:
+            r["url"] = matched[url_key]
+            r["publisher"] = matched["publisher"]
+            r["title"] = matched["title"]
+            r["source_count"] = max(r["source_count"], 1)
+            pub_date = matched.get("pubDate", "")
+            r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
+        elif valid_sources:
+            # source_indices 폴백: URL, 언론사만 가져오고 title은 유지
+            src = articles[valid_sources[0] - 1]
+            r["url"] = src[url_key]
+            r["publisher"] = src["publisher"]
+            # r["title"]은 LLM이 반환한 값 유지 (summary와 일관성 보장)
+            pub_date = src.get("pubDate", "")
+            r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
+        else:
+            r.setdefault("url", "")
+            r.setdefault("publisher", "")
+            r.setdefault("pub_time", "")
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -133,38 +217,8 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
     )
 
     # Claude는 기사 번호(index)만 반환 → 원본 데이터에서 URL, 언론사를 주입
-    # LLM이 source_indices를 잘못 부여할 수 있으므로 제목 기반 매칭을 우선 시도
     if results:
-        n = len(articles_for_analysis)
-        for r in results:
-            sources = r.pop("source_indices", [])
-            merged = r.pop("merged_indices", [])
-            valid_sources = [i for i in sources if 1 <= i <= n]
-            valid_merged = [i for i in merged if 1 <= i <= n]
-
-            r["source_count"] = len(valid_sources) + len(valid_merged)
-
-            llm_title = r.get("title", "")
-            matched = next((a for a in articles_for_analysis if a["title"] == llm_title), None)
-
-            if matched:
-                r["url"] = matched["url"]
-                r["publisher"] = matched["publisher"]
-                r["title"] = matched["title"]
-                r["source_count"] = max(r["source_count"], 1)
-                pub_date = matched.get("pubDate", "")
-                r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
-            elif valid_sources:
-                src = articles_for_analysis[valid_sources[0] - 1]
-                r["url"] = src["url"]
-                r["publisher"] = src["publisher"]
-                r["title"] = src["title"]
-                pub_date = src.get("pubDate", "")
-                r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
-            else:
-                r.setdefault("url", "")
-                r.setdefault("publisher", "")
-                r.setdefault("pub_time", "")
+        _map_results_to_articles(results, articles_for_analysis, url_key="url")
 
     return results, since, now, haiku_filtered
 
@@ -243,51 +297,19 @@ async def _run_report_pipeline(
         department=department,
     )
 
-    # source_indices → URL, 언론사, 배포시각, 원본 제목 역매핑
-    # LLM이 source_indices를 잘못 부여할 수 있으므로 제목 기반 매칭을 우선 시도
+    # source_indices → URL, 언론사, 배포시각 역매핑
     if results:
-        n = len(articles_for_analysis)
-        # 순번→DB ID 매핑 (시나리오 B)
+        _map_results_to_articles(results, articles_for_analysis, url_key="link")
+
+        # 순번→DB ID 변환 (시나리오 B modified)
         if existing_items:
             seq_to_db_id = {
                 seq: item["id"]
                 for seq, item in enumerate(existing_items, 1)
             }
-        else:
-            seq_to_db_id = {}
-
-        for r in results:
-            source_indices = r.pop("source_indices", [])
-            merged = r.pop("merged_indices", [])
-            valid_sources = [i for i in source_indices if 1 <= i <= n]
-            valid_merged = [i for i in merged if 1 <= i <= n]
-            r["source_count"] = len(valid_sources) + len(valid_merged)
-
-            llm_title = r.get("title", "")
-            matched = next((a for a in articles_for_analysis if a["title"] == llm_title), None)
-
-            if matched:
-                r["url"] = matched["link"]
-                r["publisher"] = matched["publisher"]
-                r["title"] = matched["title"]
-                r["source_count"] = max(r["source_count"], 1)
-                pub_date = matched.get("pubDate", "")
-                r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
-            elif valid_sources:
-                src = articles_for_analysis[valid_sources[0] - 1]
-                r["url"] = src["link"]
-                r["publisher"] = src["publisher"]
-                r["title"] = src["title"]
-                pub_date = src.get("pubDate", "")
-                r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
-            else:
-                r.setdefault("url", "")
-                r.setdefault("publisher", "")
-                r.setdefault("pub_time", "")
-
-            # 순번→DB ID 변환 (시나리오 B modified)
-            if r.get("item_id") and seq_to_db_id:
-                r["item_id"] = seq_to_db_id.get(r["item_id"], r["item_id"])
+            for r in results:
+                if r.get("item_id") and seq_to_db_id:
+                    r["item_id"] = seq_to_db_id.get(r["item_id"], r["item_id"])
 
     return results
 
