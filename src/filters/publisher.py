@@ -26,13 +26,18 @@ def _extract_domain(url: str) -> str | None:
         return None
 
 
-def _match_domain(article_domain: str, publisher_domain: str) -> bool:
+def _match_domain(article_domain: str, publisher_domain: str,
+                   exclude_subdomains: list[str] | None = None) -> bool:
     """기사 도메인이 언론사 도메인에 속하는지 판별한다.
 
     정확히 일치하거나 서브도메인인 경우 매칭으로 판정한다.
     예: "news.chosun.com"은 "chosun.com"에 매칭된다.
     단, "notchosun.com"은 "chosun.com"에 매칭되지 않는다.
+    exclude_subdomains에 포함된 도메인은 매칭에서 제외한다.
+    예: "it.chosun.com"은 제외 목록에 있으면 매칭되지 않는다.
     """
+    if exclude_subdomains and article_domain in exclude_subdomains:
+        return False
     return (
         article_domain == publisher_domain
         or article_domain.endswith("." + publisher_domain)
@@ -45,7 +50,7 @@ def get_publisher_name(url: str) -> str | None:
     if domain is None:
         return None
     for pub in load_publishers():
-        if _match_domain(domain, pub["domain"]):
+        if _match_domain(domain, pub["domain"], pub.get("exclude_subdomains")):
             return pub["name"]
     return None
 
@@ -60,7 +65,7 @@ def filter_by_publisher(articles: list[dict]) -> list[dict]:
         if domain is None:
             continue
         for pub in publishers:
-            if _match_domain(domain, pub["domain"]):
+            if _match_domain(domain, pub["domain"], pub.get("exclude_subdomains")):
                 result.append(article)
                 break
     return result

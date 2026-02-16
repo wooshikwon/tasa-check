@@ -4,7 +4,8 @@
     {
       "name": "조선일보",
       "domain": "chosun.com",
-      "category": "종합일간지"
+      "category": "종합일간지",
+      "exclude_subdomains": ["it.chosun.com"]
     },
     {
       "name": "중앙일보",
