@@ -236,11 +236,19 @@ _ANALYSIS_TOOL = {
         "properties": {
             "thinking": {
                 "type": "string",
-                "description": "각 기사별 단계별 판단 과정 (기사 번호, 적용 단계, skip/통과 판단과 근거)",
+                "description": (
+                    "기사별 판단 과정. skip 시 해당 단계에서 끝, 전체 pass 시 s6까지 기록. "
+                    "병합 대상은 s6에서 '병합→기사N'으로 표기. 기사 구분은 |"
+                    "\n예: 기사1: s1:skip-키워드무관 | "
+                    "기사2: s1:pass, s2:skip-오늘자팩트없음 | "
+                    "기사3: s1:pass, s2:pass-16일자체포, s3:pass-후속가능, "
+                    "s4:pass-신규사안, s5:pass-중대, s6:대표 | "
+                    "기사5: s1:pass, s2:pass, s3:pass, s4:pass, s5:pass, s6:병합→기사3"
+                ),
             },
             "results": {
                 "type": "array",
-                "description": "단독/주요 기사 항목 배열",
+                "description": "s1~s6 전체 통과한 기사 배열 (대표 또는 [단독]만 포함, 병합된 기사는 merged_indices에 기재)",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -280,7 +288,7 @@ _ANALYSIS_TOOL = {
             },
             "skipped": {
                 "type": "array",
-                "description": "스킵 기사 항목 배열",
+                "description": "s1~s5 중 하나라도 skip된 기사 배열 (병합으로 흡수된 기사는 여기에 넣지 않는다)",
                 "items": {
                     "type": "object",
                     "properties": {

@@ -258,8 +258,10 @@ async def _run_report_pipeline(
 
         for r in results:
             source_indices = r.pop("source_indices", [])
+            merged = r.pop("merged_indices", [])
             valid_sources = [i for i in source_indices if 1 <= i <= n]
-            r["source_count"] = len(valid_sources)
+            valid_merged = [i for i in merged if 1 <= i <= n]
+            r["source_count"] = len(valid_sources) + len(valid_merged)
 
             llm_title = r.get("title", "")
             matched = next((a for a in articles_for_analysis if a["title"] == llm_title), None)

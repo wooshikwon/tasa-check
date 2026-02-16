@@ -157,10 +157,15 @@ def _build_report_tool(is_scenario_b: bool) -> dict:
             "type": "boolean",
             "description": "[단독] 태그 또는 특정 언론사만 보도한 기사이면 true",
         },
+        "merged_indices": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "동일 사안으로 병합된 다른 기사 번호 (없으면 빈 배열)",
+        },
     }
     required = [
-        "title", "source_indices", "summary",
-        "reason", "exclusive",
+        "title", "source_indices", "merged_indices",
+        "summary", "reason", "exclusive",
     ]
 
     if is_scenario_b:
@@ -183,11 +188,19 @@ def _build_report_tool(is_scenario_b: bool) -> dict:
             "properties": {
                 "thinking": {
                     "type": "string",
-                    "description": "각 기사별 단계별 판단 과정 (기사 번호, 적용 단계, 제외/통과 판단과 근거)",
+                    "description": (
+                        "기사별 판단 과정. skip 시 해당 단계에서 끝, 전체 pass 시 s5까지 기록. "
+                        "병합 대상은 s5에서 '병합→기사N'으로 표기. 기사 구분은 |"
+                        "\n예: 기사1: s1:skip-오늘자팩트없음 | "
+                        "기사2: s1:pass, s2:skip-단순통계 | "
+                        "기사3: s1:pass, s2:pass-후속가능, s3:pass-신규사안, "
+                        "s4:pass-중대, s5:대표 | "
+                        "기사5: s1:pass, s2:pass, s3:pass, s4:pass, s5:병합→기사3"
+                    ),
                 },
                 "results": {
                     "type": "array",
-                    "description": "브리핑 항목 배열 (기준 미달 시 빈 배열)",
+                    "description": "s1~s5 전체 통과한 기사 배열 (대표 또는 [단독]만 포함, 병합된 기사는 merged_indices에 기재. 기준 미달 시 빈 배열)",
                     "items": {
                         "type": "object",
                         "properties": item_props,
@@ -245,7 +258,7 @@ results 분류 판단
 <step_5>
 동일 사안 병합 원칙
 분류 기준을 충족한 기사들을 results에 포함할 때, 동일 사안은 병합한다:
-  5-1) 같은 사안의 여러 언론사 기사는 source_indices로 묶어 1건으로 보고한다.
+  5-1) 같은 사안의 여러 언론사 기사는 가장 포괄적인 1건을 대표로, 나머지는 merged_indices에 병합한다.
   5-2) 단, [단독] 기사는 별도 분류한다
   예) 'A 사건' 일반 보도 3건 + [단독] 1건 → 병합 1건 + [단독] 별도 1건
 </step_5>
