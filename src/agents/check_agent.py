@@ -189,12 +189,6 @@ results 분류 판단
   5-3) 단발성 내용이 아니며, 뉴스 가치 판단에 비추어 사안이 중대해 '후속 보도 가능성'이 높을 것
 </step_5>
 
-<step_6>
-동일 사안 병합 원칙
-  6-1) 같은 사안의 여러 언론사 기사는 가장 포괄적인 1건을 대표로, 나머지는 merged_indices에 병합한다.
-  6-2) 단, [단독] 기사는 별도 분류한다
-  예) 'A 사건' 일반 보도 3건 + [단독] 1건 → 병합 1건 + [단독] 별도 1건
-</step_6>
 </analysis_rules>
 
 <summary_rules>
@@ -210,7 +204,11 @@ results 분류 판단
 <output_format>
 submit_analysis 도구를 사용하여 결과를 제출하라.
 모든 기사를 빠짐없이 results 또는 skipped 중 하나에 분류해야 한다.
-동일 사안 병합 시 대표 1건만 남기되, 병합된 기사 번호도 빠짐없이 기재한다.
+
+동일 사안 병합:
+  - 같은 사안의 여러 언론사 기사는 가장 포괄적인 1건을 대표로, 나머지는 merged_indices에 병합한다.
+  - [단독] 기사는 별도 분류한다. 예) 'A 사건' 일반 보도 3건 + [단독] 1건 → 병합 1건 + [단독] 별도 1건
+  - 병합으로 흡수된 기사는 skipped에 넣지 않는다.
 
 results 배열 (단독/주요 기사):
   - category: "exclusive" (단독) / "important" (주요)
@@ -237,18 +235,17 @@ _ANALYSIS_TOOL = {
             "thinking": {
                 "type": "string",
                 "description": (
-                    "기사별 판단 과정. skip 시 해당 단계에서 끝, 전체 pass 시 s6까지 기록. "
-                    "병합 대상은 s6에서 '병합→기사N'으로 표기. 기사 구분은 |"
+                    "기사별 판단 과정. skip 시 해당 단계에서 끝, 전체 pass 시 s5까지 기록. "
+                    "기사 구분은 |"
                     "\n예: 기사1: s1:skip-키워드무관 | "
                     "기사2: s1:pass, s2:skip-오늘자팩트없음 | "
                     "기사3: s1:pass, s2:pass-16일자체포, s3:pass-후속가능, "
-                    "s4:pass-신규사안, s5:pass-중대, s6:대표 | "
-                    "기사5: s1:pass, s2:pass, s3:pass, s4:pass, s5:pass, s6:병합→기사3"
+                    "s4:pass-신규사안, s5:pass-중대"
                 ),
             },
             "results": {
                 "type": "array",
-                "description": "s1~s6 전체 통과한 기사 배열 (대표 또는 [단독]만 포함, 병합된 기사는 merged_indices에 기재)",
+                "description": "s1~s5 전체 통과한 기사 배열 (동일 사안은 대표 1건만, 나머지는 merged_indices에 기재)",
                 "items": {
                     "type": "object",
                     "properties": {

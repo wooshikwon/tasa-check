@@ -189,18 +189,17 @@ def _build_report_tool(is_scenario_b: bool) -> dict:
                 "thinking": {
                     "type": "string",
                     "description": (
-                        "기사별 판단 과정. skip 시 해당 단계에서 끝, 전체 pass 시 s5까지 기록. "
-                        "병합 대상은 s5에서 '병합→기사N'으로 표기. 기사 구분은 |"
+                        "기사별 판단 과정. skip 시 해당 단계에서 끝, 전체 pass 시 s4까지 기록. "
+                        "기사 구분은 |"
                         "\n예: 기사1: s1:skip-오늘자팩트없음 | "
                         "기사2: s1:pass, s2:skip-단순통계 | "
                         "기사3: s1:pass, s2:pass-후속가능, s3:pass-신규사안, "
-                        "s4:pass-중대, s5:대표 | "
-                        "기사5: s1:pass, s2:pass, s3:pass, s4:pass, s5:병합→기사3"
+                        "s4:pass-중대"
                     ),
                 },
                 "results": {
                     "type": "array",
-                    "description": "s1~s5 전체 통과한 기사 배열 (대표 또는 [단독]만 포함, 병합된 기사는 merged_indices에 기재. 기준 미달 시 빈 배열)",
+                    "description": "s1~s4 전체 통과한 기사 배열 (동일 사안은 대표 1건만, 나머지는 merged_indices에 기재. 기준 미달 시 빈 배열)",
                     "items": {
                         "type": "object",
                         "properties": item_props,
@@ -255,13 +254,6 @@ results 분류 판단
   4-3) 단발성 내용이 아니며, 뉴스 가치 판단에 비추어 사안이 중대해 '후속 보도 가능성'이 높을 것
 </step_4>
 
-<step_5>
-동일 사안 병합 원칙
-분류 기준을 충족한 기사들을 results에 포함할 때, 동일 사안은 병합한다:
-  5-1) 같은 사안의 여러 언론사 기사는 가장 포괄적인 1건을 대표로, 나머지는 merged_indices에 병합한다.
-  5-2) 단, [단독] 기사는 별도 분류한다
-  예) 'A 사건' 일반 보도 3건 + [단독] 1건 → 병합 1건 + [단독] 별도 1건
-</step_5>
 </analysis_rules>
 
 <summary_rules>
@@ -284,6 +276,10 @@ _OUTPUT_RULES_A = """\
 - source_indices로 참조 기사 번호를 기재한다 (URL 역매핑용)
 - [단독] 태그 또는 특정 언론사만 보도한 기사는 exclusive: true
 
+동일 사안 병합:
+  - 같은 사안의 여러 언론사 기사는 가장 포괄적인 1건을 대표로, 나머지는 merged_indices에 병합한다.
+  - [단독] 기사는 별도 분류한다. 예) 'A 사건' 일반 보도 3건 + [단독] 1건 → 병합 1건 + [단독] 별도 1건
+
 위 단계를 모두 통과한 항목만 results에 포함한다.
 submit_report 도구로 제출하라.
 </output_rules>"""
@@ -296,6 +292,10 @@ _OUTPUT_RULES_B = """\
 - 기존 항목과 육하원칙이 동일한 기사는 추가 디테일이 있어도 results에 포함하지 않는다
 - modified 항목은 item_id(기존 항목 순번)를 기재한다
 - 수정/추가 항목이 없으면 빈 배열을 제출한다
+
+동일 사안 병합:
+  - 같은 사안의 여러 언론사 기사는 가장 포괄적인 1건을 대표로, 나머지는 merged_indices에 병합한다.
+  - [단독] 기사는 별도 분류한다. 예) 'A 사건' 일반 보도 3건 + [단독] 1건 → 병합 1건 + [단독] 별도 1건
 
 위 단계를 모두 통과한 항목만 results에 포함한다.
 submit_report 도구로 제출하라.
