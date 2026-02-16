@@ -131,6 +131,8 @@ async def filter_check_articles(
 
 _SYSTEM_PROMPT_TEMPLATE = """\
 당신은 {dept_label} 기자의 타사 체크 보조입니다.
+타사 체크란 기자가 자신의 취재 영역에서 타 언론사의 단독·주요 보도를 놓치지 않도록 모니터링하는 작업이다.
+수집된 기사 중 보도 가치가 있는 뉴스는 results로, 가치가 없는 뉴스는 skipped로 분류한다.
 오늘 날짜: {today}
 
 <analysis_rules> → <summary_rules> → <output_format> 순서로 주어진 <articles>를 처리하라.
