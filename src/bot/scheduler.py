@@ -40,8 +40,6 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
     db = context.bot_data["db"]
 
     lock = _user_locks.setdefault(telegram_id, asyncio.Lock())
-    if lock.locked():
-        return
 
     journalist = await repo.get_journalist(db, telegram_id)
     if not journalist:
@@ -99,8 +97,6 @@ async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
     db = context.bot_data["db"]
 
     lock = _user_locks.setdefault(telegram_id, asyncio.Lock())
-    if lock.locked():
-        return
 
     journalist = await repo.get_journalist(db, telegram_id)
     if not journalist:
