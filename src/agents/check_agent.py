@@ -176,8 +176,8 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 </step_3>
 
 <step_4>
-보고 이력 중복 skip
-이전에 보고 및 skip한 이력과 중복된 내용의 기사는 다시 보고하지 않는다:
+report_history·skip_history 중복 skip
+report_history·skip_history와 중복된 내용의 기사는 다시 보고하지 않는다:
   4-1) 이미 체크한 기사와 육하원칙(누가, 언제, 어디서, 무엇을)의 핵심 사실이 동일하면 skip한다.
   4-2) 현재 기사에 새로운 관점, 업계 반응, 추가적인 사실이 존재하더라도, 이전 보고한 기사와 핵심 육하원칙이 동일하면 skip한다.
   4-3) 이전에 이미 skip된 기사가 반복 등장한 것도 당연히 skip 유지.

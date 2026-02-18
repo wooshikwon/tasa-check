@@ -72,7 +72,7 @@ async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 당일 재요청. delta_results에서 `action` 필드를 확인하여 기존 항목과 병합한다.
 
-- `action == "modified"`: 기존 항목의 summary, reason, exclusive, key_facts를 갱신
+- `action == "modified"`: 기존 항목의 summary, reason, exclusive를 갱신
 - `action == "added"`: 신규 항목으로 추가
 - 변경 없는 기존 항목: `action = "unchanged"`로 표기
 
@@ -104,12 +104,12 @@ async def _run_check_pipeline(db, journalist: dict) -> tuple[list[dict] | None, 
    ```python
    _SKIP_TITLE_TAGS = {"[포토]", "[사진]", "[영상]", "[동영상]", "[화보]", "[카드뉴스]", "[인포그래픽]"}
    ```
-5. **Haiku 사전 필터**: `filter_check_articles()` -- 키워드 관련성 기반 사전 필터링 (제목+description만 사용)
+5. **Haiku 사전 필터**: `filter_check_articles()` -- 부서 관련성 기반 사전 필터링 (제목+description만 사용)
 6. **본문 수집**: `fetch_articles_batch(urls)` -- Haiku 통과 기사만 스크래핑 (최대 800자)
 7. **분석용 데이터 조립**: title, publisher, body, url, pubDate 필드로 구성
 8. **이전 체크 이력 로드**: `repo.get_recent_reported_articles(db, journalist["id"], hours=72)` -- 72시간 이내 이력
 9. **Claude 분석**: `analyze_articles()` 호출 (Haiku, 5회 재시도). api_key, articles, history, department, keywords 전달
-10. **인덱스 역매핑**: Claude가 반환한 `source_indices`, `merged_indices`(1-based)를 실제 URL, 언론사명으로 치환. `url`, `publisher`, `pub_time`, `source_count` 필드를 주입
+10. **인덱스 역매핑**: `_map_results_to_articles()` 헬퍼로 title 기반 매칭 우선, source_indices 폴백으로 URL, 언론사명, pub_time, source_count를 주입
 
 #### _run_report_pipeline()
 
@@ -132,7 +132,7 @@ async def _run_report_pipeline(
 7. **분석용 데이터 조립**: check와 유사하나 `originallink`, `link` 필드를 추가로 포함
 8. **이전 report 이력**: `repo.get_recent_report_items(db, journalist["id"])` -- 2일치
 9. **Claude 분석**: `analyze_report_articles()` 호출. existing_items가 있으면(시나리오 B) 기존 항목 전달
-10. **인덱스 역매핑**: `source_indices`를 url, publisher, pub_time, source_count로 치환. URL은 `src["link"]` (네이버 뉴스 URL) 사용. `item_id`는 순번→DB ID 변환
+10. **인덱스 역매핑**: `_map_results_to_articles()` 헬퍼로 title 기반 매칭 우선, source_indices 폴백으로 URL, 언론사명, pub_time, source_count를 주입. URL은 `src["link"]` (네이버 뉴스 URL) 사용. `item_id`는 순번→DB ID 변환
 
 ### 1.5 설정 변경 핸들러
 
@@ -323,6 +323,12 @@ _MAX_MSG_LEN = 4096
 
 모든 사용자 입력/Claude 응답 텍스트는 `html_module.escape()`로 HTML 이스케이프 처리한다.
 
+**공통 유틸리티 함수:**
+
+- `_publisher_label(publisher, source_count)` -- 복수 출처면 `[언론사 등 다수]`, 단일이면 `[언론사]` 반환
+- `_split_blockquote_messages(header, item_lines)` -- header + blockquote expandable 메시지를 4096자 이내로 분할. `list[str]` 반환
+- `_truncate(msg)` -- 4096자 초과 시 `msg[:4093] + "..."` 로 잘라냄
+
 ### 3.1 /check 포맷
 
 #### format_check_header()
@@ -331,11 +337,11 @@ _MAX_MSG_LEN = 4096
 def format_check_header(total: int, important: int, since: datetime, now: datetime) -> str:
 ```
 
-- since, now를 KST로 변환하여 `%Y-%m-%d %H:%M` 포맷으로 표시
+- since, now를 KST로 변환. 같은 날이면 시각만(`HH:MM ~ HH:MM`), 다른 날이면 날짜+시각 표시
 - 출력 형태:
   ```html
-  <b>타사 체크</b> (2025-01-15 09:00 ~ 2025-01-15 12:00)
-  주요 <b>3</b>건 (전체 8건 중)
+  🔍 <b>타사 체크</b> (09:00 ~ 12:00)
+  주요 <b>3</b>건 / 전체 8건
   ```
 
 #### format_article_message()
@@ -351,7 +357,9 @@ def format_article_message(article: dict) -> str:
 tag_map = {"exclusive": "[단독]", "breaking": "[속보]"}
 ```
 
-제목 라인 구성: `{tag} [{publisher}] {title} ({pub_time})`
+제목에 `[단독]` 태그가 이미 포함된 경우 중복 제거 처리. `_publisher_label()`로 복수 출처 시 `[언론사 등 다수]` 표시.
+
+제목 라인 구성: `● {tag} {pub_label} {title} ({pub_time})`
 
 메시지 구조:
 ```html
@@ -360,7 +368,7 @@ tag_map = {"exclusive": "[단독]", "breaking": "[속보]"}
 -> <i>자사 미보도 단독 기사로, 검찰 출입 기자 확인 필요</i></blockquote>
 ```
 
-- `url` 필드를 링크로 사용. 제목 전체가 하이퍼링크. `source_count > 1`이면 `[언론사 등 다수]` 표시
+- `url` 필드를 링크로 사용. 제목 전체가 하이퍼링크
 - 메시지 길이가 `_MAX_MSG_LEN` (4096자) 초과 시 `msg[:4093] + "..."` 로 잘라냄
 
 #### format_no_results() / format_no_important()
@@ -375,15 +383,15 @@ def format_skipped_articles(skipped: list[dict], haiku_filtered: int = 0) -> lis
 ```
 
 - `topic_cluster` 기준 중복 제거: 동일 `topic_cluster` 값을 가진 기사는 1건만 표시
-- 각 항목을 `- {제목 링크} -> {스킵 사유}` 형태로 나열
-- 전체를 `<blockquote expandable>` 태그로 감싸 접힌 목록으로 표시
+- `_publisher_label()`로 언론사 + 다수 표시 처리
+- 각 항목을 `- {[언론사] 제목 (시각) 링크} → {스킵 사유}` 형태로 나열
+- `_split_blockquote_messages()`로 4096자 이내 메시지 분할 (`list[str]` 반환)
 - 출력 형태:
   ```html
-  <b>스킵 5건</b>
-  <blockquote expandable>- <a href="...">기사 제목 1</a> -> 기보도 내용
-  - <a href="...">기사 제목 2</a> -> 관련성 낮음</blockquote>
+  <b>스킵 5건</b> (사진/광고 기사 필터링 3건 외)
+  <blockquote expandable>- <a href="...">[한국일보] 기사 제목 1 (14:30)</a> → 기보도 내용
+  - <a href="...">[조선일보] 기사 제목 2 (15:00)</a> → 관련성 낮음</blockquote>
   ```
-- `_truncate()`로 4096자 제한 적용
 
 ### 3.2 /report 포맷
 
@@ -404,7 +412,8 @@ def format_report_header_a(department: str, date: str, count: int) -> str:
 
 시나리오 A (당일 첫 요청) 헤더:
 ```html
-<b>사회부 주요 뉴스</b> (2025-01-15) - 총 <b>12</b>건
+📋 <b>사회부 주요 뉴스</b> (2025-01-15)
+주요 <b>12</b>건
 ```
 
 #### format_report_header_b()
@@ -415,11 +424,13 @@ def format_report_header_b(department: str, date: str, total: int, modified: int
 
 시나리오 B (당일 재요청) 헤더. 변경 내역을 함께 표시:
 ```html
-<b>사회부 주요 뉴스</b> (2025-01-15) - 총 <b>15</b>건 (수정 2건, 추가 3건)
+📋 <b>사회부 주요 뉴스</b> (2025-01-15)
+총 <b>15</b>건 (수정 2건, 추가 3건)
 ```
 변경이 없으면:
 ```html
-<b>사회부 주요 뉴스</b> (2025-01-15) - 총 <b>12</b>건 (변경 없음)
+📋 <b>사회부 주요 뉴스</b> (2025-01-15)
+총 <b>12</b>건 (변경 없음)
 ```
 
 #### format_report_item()
@@ -431,42 +442,39 @@ def format_report_item(item: dict, scenario_b: bool = False) -> str:
 브리핑 항목 1건을 HTML 메시지로 변환한다.
 
 태그 결정 로직:
-- `exclusive`가 True면 `[단독]` 추가
+- `exclusive`가 True면 `[단독]` 추가 (제목에 이미 `[단독]`이 있으면 중복 제거)
 - `scenario_b=True`일 때:
   - `action == "modified"`: `[수정]` 추가
   - `action == "added"`: `[신규]` 추가
-- `category == "follow_up"`: `[후속]` 추가
-- 복수 태그는 공백으로 결합 (예: `[단독] [신규] [후속]`)
+- 복수 태그는 공백으로 결합 (예: `[단독] [신규]`)
+- `_publisher_label()`로 언론사 표시: 복수 출처면 `[언론사 등 다수]`
 
 메시지 구조:
 ```html
-<b>[단독] [신규] [한국일보] 검찰 수사 착수 (14:30)</b>
-
-검찰이 대규모 비리 사건에 대한 수사에 착수했다.
-
+<b><a href="https://...">■ [단독] [신규] [한국일보] 검찰 수사 착수 (14:30)</a></b>
+<blockquote expandable>검찰이 대규모 비리 사건에 대한 수사에 착수했다.
 -> <i>자사 미보도 단독 기사</i>
-
-<i>(이전 전달: 어제 브리핑에서 수사 착수 가능성 언급)</i>
-
-<a href="https://...">기사 원문</a>
+<i>(이전 전달: 어제 브리핑에서 수사 착수 가능성 언급)</i></blockquote>
 ```
 
 - `prev_reference`가 있으면 이전 전달 내역 표시 (`prev_ref` 필드)
 - URL은 `item["url"]` 단일 값 사용 (check의 `article_urls` 리스트와 다름)
 - `_truncate()`로 4096자 제한 적용
 
-### 3.3 공통 유틸리티
-
-#### _truncate()
+#### format_unchanged_report_items()
 
 ```python
-def _truncate(msg: str) -> str:
-    if len(msg) > _MAX_MSG_LEN:
-        return msg[:_MAX_MSG_LEN - 3] + "..."
-    return msg
+def format_unchanged_report_items(items: list[dict]) -> list[str]:
 ```
 
-Telegram 메시지 최대 길이 4096자를 초과하는 메시지를 잘라낸다. `format_article_message()`는 내부에서 직접 동일한 로직을 수행하고, `format_skipped_articles()`와 `format_report_item()`은 이 함수를 호출한다.
+시나리오 B에서 변경 없는 기존 항목들을 제목+링크로 모아 토글 메시지 목록으로 포맷팅한다. `_split_blockquote_messages()`로 4096자 이내 분할.
+
+출력 형태:
+```html
+<b>기보고 5건</b>
+<blockquote expandable>- <a href="...">[한국일보] 기사 제목 1 (14:30)</a>
+- <a href="...">[조선일보] 기사 제목 2 (15:00)</a></blockquote>
+```
 
 ---
 
@@ -563,14 +571,13 @@ JobQueue에서 호출되는 자동 check 실행. `check_handler()`와 동일한 
 
 차이점:
 - 메시지 전송에 `context.bot.send_message(chat_id=chat_id, ...)` 사용
-- 실행 시작 시 구분선 + 실행 시각 메시지 전송:
+- `async with lock:` -- 핸들러의 `lock.locked()` 체크와 달리, 스케줄러는 Lock을 기다린다 (순차 처리)
+- 실행 시작 시 구분선 + 이모지 메시지 전송:
   ```
   ━━━━━━━━━━━━━━━━━━━━
-  자동 타사체크
-  ━━━━━━━━━━━━━━━━━━━━
+  ⏰ 자동 타사체크
   ```
-- Lock이 이미 잠겨 있으면 무응답으로 건너뜀 (사용자에게 알리지 않음)
-- 에러 시 `"[자동 체크] 오류: {e}"` 메시지 전송
+- 에러 시 `"[자동 체크] 실패: {format_error_message(e)}"` 메시지 전송
 
 `_user_locks`, `_pipeline_semaphore`, `_run_check_pipeline()` 등을 `src/bot/handlers.py`에서 직접 임포트하여 사용한다.
 

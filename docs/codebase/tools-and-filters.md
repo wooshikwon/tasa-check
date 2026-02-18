@@ -37,7 +37,7 @@ async def search_news(
 **파라미터:**
 - `keywords` -- 검색 키워드 리스트. 각 키워드별로 개별 API 호출을 수행한다.
 - `since` -- 이 시각 이후에 발행된 기사만 포함한다.
-- `max_results` -- 반환할 최대 기사 수. 기본값 `200`(check), report 호출 시 `400`을 전달한다.
+- `max_results` -- 반환할 최대 기사 수. 기본값 `200`(check). check와 report 모두 `max_results=300`을 전달한다.
 
 **호출 지점별 max_results:**
 - `/check` 명령: 300건 (`src/bot/handlers.py`에서 `max_results=300` 전달)
@@ -323,7 +323,7 @@ def filter_by_publisher(articles: list[dict]) -> list[dict]:
 
 1. `load_publishers()`로 화이트리스트를 가져온다.
 2. 각 기사의 `originallink` 필드에서 도메인을 추출한다.
-3. 추출된 도메인을 화이트리스트의 모든 언론사 도메인과 `_match_domain()`으로 비교한다.
+3. 추출된 도메인을 화이트리스트의 모든 언론사 도메인과 `_match_domain(domain, pub["domain"], pub.get("exclude_subdomains"))`으로 비교한다.
 4. 매칭되는 언론사가 있으면 결과 리스트에 추가한다.
 
 **입력:** `search_news()`가 반환한 기사 dict 리스트
@@ -337,7 +337,7 @@ def filter_by_publisher(articles: list[dict]) -> list[dict]:
 def get_publisher_name(url: str) -> str | None:
 ```
 
-URL에 해당하는 언론사 이름을 반환한다. 화이트리스트에 없으면 `None`.
+URL에 해당하는 언론사 이름을 반환한다. 화이트리스트에 없으면 `None`. 내부적으로 `_match_domain(domain, pub["domain"], pub.get("exclude_subdomains"))`을 호출하여 `exclude_subdomains`를 고려한다.
 
 **사용처:**
 - `src/bot/handlers.py` -- check/report 분석용 기사 데이터 구성 시 `publisher` 필드에 언론사명을 넣기 위해 호출
@@ -346,7 +346,8 @@ URL에 해당하는 언론사 이름을 반환한다. 화이트리스트에 없�
 ### 3.4. _match_domain() -- 도메인 매칭
 
 ```python
-def _match_domain(article_domain: str, publisher_domain: str) -> bool:
+def _match_domain(article_domain: str, publisher_domain: str,
+                   exclude_subdomains: list[str] | None = None) -> bool:
 ```
 
 기사 도메인이 언론사 도메인에 속하는지 판별한다.
@@ -354,15 +355,18 @@ def _match_domain(article_domain: str, publisher_domain: str) -> bool:
 **매칭 규칙:**
 
 ```python
+if exclude_subdomains and article_domain in exclude_subdomains:
+    return False
 return (
     article_domain == publisher_domain
     or article_domain.endswith("." + publisher_domain)
 )
 ```
 
-1. 정확히 일치하는 경우: `"chosun.com" == "chosun.com"` -- 매칭
-2. 서브도메인인 경우: `"news.chosun.com".endswith(".chosun.com")` -- 매칭
-3. 단순 문자열 포함이 아닌 `.` 구분자 기반이므로: `"notchosun.com".endswith(".chosun.com")` -- 매칭 안됨
+1. `exclude_subdomains`에 포함된 도메인이면 매칭에서 제외: `"it.chosun.com"` → 제외 목록에 있으면 매칭 안됨
+2. 정확히 일치하는 경우: `"chosun.com" == "chosun.com"` -- 매칭
+3. 서브도메인인 경우: `"news.chosun.com".endswith(".chosun.com")` -- 매칭
+4. 단순 문자열 포함이 아닌 `.` 구분자 기반이므로: `"notchosun.com".endswith(".chosun.com")` -- 매칭 안됨
 
 ### 3.5. _extract_domain() -- URL에서 도메인 추출
 
@@ -433,7 +437,8 @@ NAVER_CLIENT_SECRET: str = os.environ["NAVER_CLIENT_SECRET"]
     {
       "name": "조선일보",
       "domain": "chosun.com",
-      "category": "종합일간지"
+      "category": "종합일간지",
+      "exclude_subdomains": ["it.chosun.com"]
     }
   ]
 }
@@ -443,6 +448,7 @@ NAVER_CLIENT_SECRET: str = os.environ["NAVER_CLIENT_SECRET"]
 - `name` -- 언론사 한글 이름 (get_publisher_name 반환값)
 - `domain` -- 도메인 매칭용 문자열 (_match_domain에서 사용)
 - `category` -- 분류 (현재 코드에서 사용하지 않음, 참조용)
+- `exclude_subdomains` -- (선택) 매칭에서 제외할 서브도메인 리스트. 해당 서브도메인은 화이트리스트에 매칭되지 않는다
 
 ### 5.2. 언론사 목록 (총 27개)
 
@@ -450,8 +456,8 @@ NAVER_CLIENT_SECRET: str = os.environ["NAVER_CLIENT_SECRET"]
 
 | 언론사 | 도메인 |
 |---|---|
-| 조선일보 | `chosun.com` |
-| 중앙일보 | `joongang.co.kr` |
+| 조선일보 | `chosun.com` | `exclude_subdomains: ["it.chosun.com"]` |
+| 중앙일보 | `joongang.co.kr` | |
 | 동아일보 | `donga.com` |
 | 한겨레 | `hani.co.kr` |
 | 경향신문 | `khan.co.kr` |
@@ -512,7 +518,7 @@ NAVER_CLIENT_SECRET: str = os.environ["NAVER_CLIENT_SECRET"]
 
 화이트리스트의 도메인은 두 가지 형태가 혼재한다:
 
-- **루트 도메인**: `chosun.com`, `donga.com` 등 -- 해당 도메인의 모든 서브도메인(`news.chosun.com` 등)도 매칭된다.
+- **루트 도메인**: `chosun.com`, `donga.com` 등 -- 해당 도메인의 모든 서브도메인(`news.chosun.com` 등)도 매칭된다. 단, `exclude_subdomains`에 명시된 서브도메인은 제외된다 (예: `it.chosun.com`은 조선일보 매칭에서 제외).
 - **서브도메인**: `news.kbs.co.kr`, `imnews.imbc.com` 등 -- 정확히 해당 서브도메인(또는 그 하위)만 매칭된다. 예를 들어 `news.kbs.co.kr`은 매칭되지만 `kbs.co.kr`은 매칭되지 않는다.
 
 ---

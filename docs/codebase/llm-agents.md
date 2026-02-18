@@ -52,12 +52,11 @@ async def analyze_articles(
 async def filter_check_articles(
     api_key: str,
     articles: list[dict],
-    keywords: list[str],
     department: str,
 ) -> list[dict]:
 ```
 
-/check 파이프라인에서 본문 스크래핑 전에 호출되는 Haiku LLM 사전 필터. 제목+description만으로 키워드 관련성을 판단하여 무관한 기사를 제거한다.
+/check 파이프라인에서 본문 스크래핑 전에 호출되는 Haiku LLM 사전 필터. 제목+description만으로 부서 관련성을 판단하여 무관한 기사를 제거한다.
 
 **모델 설정:**
 
@@ -69,10 +68,12 @@ async def filter_check_articles(
 | tool_choice | `{"type": "tool", "name": "filter_news"}` (강제 도구 호출) |
 
 **필터 기준 (시스템 프롬프트):**
-1. 키워드 관련성: 키워드의 기관/기업/인물이 등장하는 기사만 포함
+1. 부서 관련성: 해당 부서 취재 영역에 해당하는 기사만 포함
 2. 사진 캡션 제외
-3. 중복 사안 정리: 같은 사안의 다수 기사 중 정보가 가장 풍부한 기사(최대 3건)만 선별
+3. 명백한 홍보성 제외: 보도자료 전재, 기업 자체 수상/CSR 홍보, 할인/이벤트 안내 등 (대규모 투자/M&A/정책 변화는 제외하지 않음)
 4. 애매한 경우 포함 쪽으로 판단
+
+시스템 프롬프트에 `DEPARTMENT_PROFILES`의 `coverage`와 `criteria`를 모두 주입한다.
 
 **도구 스키마:** `/report`의 `filter_news`와 동일한 `_CHECK_FILTER_TOOL` 사용. `selected_indices` (int 배열) 반환.
 
@@ -195,15 +196,19 @@ def _build_user_prompt(
   "description": "기사 분석 결과를 제출한다. 모든 기사를 results 또는 skipped에 빠짐없이 분류한다.",
   "input_schema": {
     "type": "object",
-    "required": ["results", "skipped"],
+    "required": ["thinking", "results", "skipped"],
     "properties": {
+      "thinking": {
+        "type": "string",
+        "description": "기사별 판단 과정. skip 시 해당 단계에서 끝, 전체 pass 시 s5까지 기록. 기사 구분은 |"
+      },
       "results": {
         "type": "array",
-        "description": "단독/주요 기사 항목 배열",
+        "description": "s1~s5 전체 통과한 기사 배열 (동일 사안은 대표 1건만, 나머지는 merged_indices에 기재)",
         "items": {
           "type": "object",
           "required": ["category", "topic_cluster", "source_indices", "merged_indices",
-                       "title", "summary", "reason", "key_facts"],
+                       "title", "summary", "reason"],
           "properties": {
             "category": { "type": "string", "enum": ["exclusive", "important"] },
             "topic_cluster": { "type": "string", "description": "주제 식별자 (짧은 구문)" },
@@ -213,15 +218,13 @@ def _build_user_prompt(
                                 "description": "동일 사안으로 병합된 다른 기사 번호 (없으면 빈 배열)" },
             "title": { "type": "string" },
             "summary": { "type": "string", "description": "2~3문장 요약" },
-            "reason": { "type": "string", "description": "주요 판단 근거 1문장" },
-            "key_facts": { "type": "array", "items": { "type": "string" },
-                           "description": "핵심 팩트 배열" }
+            "reason": { "type": "string", "description": "판단 근거 1~2문장" }
           }
         }
       },
       "skipped": {
         "type": "array",
-        "description": "스킵 기사 항목 배열",
+        "description": "s1~s5 중 하나라도 skip된 기사 배열 (병합으로 흡수된 기사는 여기에 넣지 않는다)",
         "items": {
           "type": "object",
           "required": ["topic_cluster", "source_indices", "title", "reason"],
@@ -329,7 +332,7 @@ filter_news 도구로 선별된 기사 번호를 제출하세요.
 }
 ```
 
-### 2.2 Stage 2: analyze_report_articles() -- Sonnet 분석
+### 2.2 Stage 2: analyze_report_articles() -- Haiku 분석
 
 ```python
 async def analyze_report_articles(
@@ -466,24 +469,29 @@ def _build_user_prompt(
 
 도구 스키마는 `_build_report_tool(is_scenario_b)` 함수로 시나리오에 따라 동적으로 생성된다.
 
-**공통 필드 (시나리오 A/B 모두):**
-- `title` (string): 대표 기사의 원본 제목
+**최상위 필드:**
+- `thinking` (string): 기사별 판단 과정 (step별 pass/skip 기록)
+- `results` (array): 브리핑 항목 배열
+
+**results 항목 공통 필드 (시나리오 A/B 모두):**
+- `title` (string): 대표 기사의 원본 제목 (수집된 기사 목록의 제목을 그대로 사용)
 - `source_indices` (array[integer]): 참조 기사 번호 배열
+- `merged_indices` (array[integer]): 동일 사안으로 병합된 다른 기사 번호 (없으면 빈 배열)
 - `summary` (string): 2~3줄 육하원칙 스트레이트 형식 요약
-- `reason` (string): 선택 사유 1문장
-- `category` (string, enum: ["follow_up", "new"])
-- `key_facts` (array[string]): 당일 새로 발생/확인된 핵심 팩트 배열
+- `reason` (string): 포함 사유 1~2문장
 - `exclusive` (boolean): [단독] 여부
-- `prev_reference` (string): follow_up이면 'YYYY-MM-DD "이전 제목"', new이면 빈 문자열
 
 **시나리오 B 추가 필드:**
 - `action` (string, enum: ["modified", "added"]): 기존 캐시 대비 변경 유형
 - `item_id` (integer): 수정 대상 기존 항목 순번 (modified일 때 해당 순번, added일 때 0)
 
-기존 도구 스키마에서 변경된 점:
-- `url` 필드가 제거됨 (URL은 `source_indices`를 통해 handlers.py에서 역매핑)
-- `tags` 필드가 `key_facts`로 대체됨
-- `prev_reference`는 union type(`["string", "null"]`) 대신 `"string"` 타입으로, null 대신 빈 문자열 사용
+**스키마에서 제거되어 `_parse_report_response()`에서 기본값 주입되는 필드:**
+- `category`: 스키마에 없음. 파싱 시 `"new"` 기본값 주입
+- `prev_reference`: 스키마에 없음. 파싱 시 `""` 기본값 주입
+
+**설계 의도:**
+- `url` 필드 제거: URL은 `source_indices`를 통해 handlers.py의 `_map_results_to_articles()`에서 역매핑
+- `category`/`prev_reference` 제거: LLM에게 분류 부담을 줄이고, `_parse_report_response()`에서 DB 호환 기본값을 주입
 - 시나리오 A에서는 `action`/`item_id` 필드 자체가 스키마에 포함되지 않음
 
 ---
@@ -596,7 +604,7 @@ def _build_user_prompt(
 
 ## 5. 토큰 사용량 최적화 설계
 
-### 5.1 /report의 2단 파이프라인 (Haiku 필터 --> Sonnet 분석)
+### 5.1 /report의 2단 파이프라인 (Haiku 필터 → Haiku 분석)
 
 | 단계 | 모델 | 입력 | 비용 특성 |
 |---|---|---|---|
@@ -605,7 +613,7 @@ def _build_user_prompt(
 
 /check도 2단 Haiku 파이프라인으로 동작한다: Haiku 사전 필터 → Haiku 분석.
 
-Stage 1에서 부서 무관 기사, 사진 캡션, 중복 사안을 제거하므로 Stage 2에 전달되는 기사 수가 줄어든다. Stage 1은 본문 스크래핑 전에 실행되므로 스크래핑 자체도 필터 통과 기사에 대해서만 수행한다. 이 구조로 Sonnet에 전달되는 입력 토큰과 스크래핑 비용을 동시에 절감한다.
+Stage 1에서 부서 무관 기사, 사진 캡션, 중복 사안을 제거하므로 Stage 2에 전달되는 기사 수가 줄어든다. Stage 1은 본문 스크래핑 전에 실행되므로 스크래핑 자체도 필터 통과 기사에 대해서만 수행한다. 이 구조로 분석 에이전트에 전달되는 입력 토큰과 스크래핑 비용을 동시에 절감한다.
 
 ### 5.2 본문 800자 제한
 

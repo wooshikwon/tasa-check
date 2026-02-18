@@ -110,10 +110,10 @@ filtered = [
 ### 1-7. Haiku 사전 필터
 
 ```python
-filtered = await filter_check_articles(journalist["api_key"], filtered, journalist["keywords"], journalist["department"])
+filtered = await filter_check_articles(journalist["api_key"], filtered, journalist["department"])
 ```
 
-`src/agents/check_agent.py`의 `filter_check_articles()` 함수로 키워드 관련성 기반 사전 필터링을 수행한다. 제목+description만으로 판단하여 키워드 무관 기사, 사진 캡션, 중복 사안을 제거한다. 본문 스크래핑 전 단계이므로 스크래핑 비용을 절감한다.
+`src/agents/check_agent.py`의 `filter_check_articles()` 함수로 부서 관련성 기반 사전 필터링을 수행한다. 제목+description만으로 판단하여 키워드 무관 기사, 사진 캡션, 중복 사안을 제거한다. 본문 스크래핑 전 단계이므로 스크래핑 비용을 절감한다.
 
 **모델:** `claude-haiku-4-5-20251001` (temperature 0.0, max_tokens 2048)
 
@@ -214,7 +214,8 @@ results = await analyze_articles(
 **LLM 호출 방식:** tool_use 강제 (`tool_choice: {"type": "tool", "name": "submit_analysis"}`)
 
 **`submit_analysis` 도구 스키마:**
-- `results` 배열: `{category, topic_cluster, source_indices, merged_indices, title, summary, reason, key_facts}`
+- `thinking`: 기사별 판단 과정 (step별 pass/skip 기록)
+- `results` 배열: `{category, topic_cluster, source_indices, merged_indices, title, summary, reason}`
   - category: `"exclusive"` (단독) 또는 `"important"` (주요)
 - `skipped` 배열: `{topic_cluster, source_indices, title, reason}`
 
@@ -224,22 +225,17 @@ results = await analyze_articles(
 
 ### 1-11. source_indices → URL 역매핑
 
-`_run_check_pipeline()` 내에서 LLM이 반환한 기사 번호(1-based)를 실제 URL/언론사 정보로 변환한다.
+`_run_check_pipeline()` 내에서 `_map_results_to_articles()` 헬퍼를 호출하여 LLM 결과에 원본 기사 정보를 매핑한다.
 
 ```python
-for r in results:
-    sources = r.pop("source_indices", [])
-    merged = r.pop("merged_indices", [])
-    valid_sources = [i for i in sources if 1 <= i <= n]
-    valid_merged = [i for i in merged if 1 <= i <= n]
-    r["source_count"] = len(valid_sources) + len(valid_merged)
-    if valid_sources:
-        src = articles_for_analysis[valid_sources[0] - 1]
-        r["url"] = src["url"]
-        r["publisher"] = src["publisher"]
-        r["title"] = src["title"]
-    # 첫 번째 source에서 publisher, pub_time 추출
+_map_results_to_articles(results, articles_for_analysis, url_key="url")
 ```
+
+`_map_results_to_articles()` 헬퍼는 다음 순서로 매칭한다:
+
+1. **title 기반 매칭 (우선)**: `_match_article()`로 LLM이 반환한 제목을 원본 기사와 매칭. 정확 일치 → 정규화 후 일치 ([단독] 등 태그 제거) → substring 포함 (15자 이상) 순서로 시도
+2. **source_indices 폴백**: title 매칭 실패 시 1-based 인덱스로 원본 기사 참조. 이 경우 title은 LLM 반환값을 유지하여 summary와의 일관성을 보장
+3. 매칭된 기사에서 `url`, `publisher`, `pub_time`, `source_count`를 주입
 
 ### 1-12. 결과 저장
 
@@ -336,7 +332,7 @@ raw_articles = await search_news(report_keywords, since, max_results=300)
 ]
 ```
 
-/check는 기자 개인의 `keywords`(좁은 범위), /report는 부서 전체 `report_keywords`(넓은 범위)를 사용한다. `max_results`도 200이 아닌 400으로 상향한다.
+/check는 기자 개인의 `keywords`(좁은 범위), /report는 부서 전체 `report_keywords`(넓은 범위)를 사용한다. `max_results`는 check와 동일하게 300이다.
 
 ### 2-5. 언론사 필터
 
@@ -461,26 +457,18 @@ results = await analyze_report_articles(
 **LLM 호출 방식:** tool_use 강제 (`tool_choice: {"type": "tool", "name": "submit_report"}`)
 
 **`submit_report` 도구 스키마:**
-- `results` 배열: `{action, item_id, title, source_indices, summary, reason, key_facts, category, exclusive, prev_reference}` (action/item_id는 시나리오 B 전용)
+- `thinking`: 기사별 판단 과정 (step별 pass/skip 기록)
+- `results` 배열: `{title, source_indices, merged_indices, summary, reason, exclusive}` (action/item_id는 시나리오 B 전용 추가)
   - action: `"modified"` (기존 수정) / `"added"` (신규) — 시나리오 B 전용
-  - category: `"follow_up"` (후속) / `"new"` (신규)
+  - `category`, `prev_reference` 필드는 스키마에서 제거됨. `_parse_report_response()`에서 기본값 주입 (`category: "new"`, `prev_reference: ""`)
 
 ### 2-12. source_indices → URL 역매핑
 
 ```python
-for r in results:
-    source_indices = r.pop("source_indices", [])
-    valid_sources = [i for i in source_indices if 1 <= i <= n]
-    if valid_sources:
-        src = articles_for_analysis[valid_sources[0] - 1]
-        if not r.get("url") or "naver" not in r.get("url", ""):
-            r["url"] = src["link"]  # 네이버 뉴스 URL로 교체
-        r["publisher"] = src["publisher"]
-        pub_date = src.get("pubDate", "")
-        r["pub_time"] = pub_date.split(" ")[-1] if " " in pub_date else ""
+_map_results_to_articles(results, articles_for_analysis, url_key="link")
 ```
 
-LLM이 반환한 URL이 네이버 뉴스 링크가 아닌 경우, `link` (네이버 뉴스 URL)로 교체한다.
+`_map_results_to_articles()` 헬퍼로 check와 동일한 매칭 로직을 사용한다 (title 기반 우선, source_indices 폴백). report는 `url_key="link"`로 네이버 뉴스 URL을 사용한다.
 
 ### 2-13. 결과 저장/갱신 및 전송
 
@@ -602,7 +590,6 @@ search_news() 반환
     "title": "기사 제목",
     "summary": "요약 2~3문장",
     "reason": "판단 근거",
-    "key_facts": ["팩트1", "팩트2"],
   },
   {
     "category": "skip",
@@ -622,7 +609,7 @@ search_news() 반환
     "merged_from": ["https://n.news.naver.com/...", "https://n.news.naver.com/..."],
     "publisher": "한국일보",
     "pub_time": "15:30",
-    "title": "...", "summary": "...", "reason": "...", "key_facts": [...],
+    "title": "...", "summary": "...", "reason": "...",
   },
   ...
 ]
@@ -635,7 +622,7 @@ search_news() 반환
 ### 4-2. /report 데이터 흐름
 
 ```
-search_news(report_keywords, max_results=400)
+search_news(report_keywords, max_results=300)
         │
         ▼  filter_by_publisher()
         │
@@ -653,15 +640,15 @@ search_news(report_keywords, max_results=400)
 [
   {
     "action": "added",          # 시나리오 B에서만 의미
-    "item_id": null,
+    "item_id": 0,
     "title": "기사 제목",
     "source_indices": [2, 5],
+    "merged_indices": [3],
     "summary": "요약 2~3줄",
     "reason": "선택 사유",
-    "key_facts": ["팩트1", "팩트2"],
-    "category": "new",           # "follow_up" / "new"
     "exclusive": false,
-    "prev_reference": null,      # follow_up이면 "2025-01-15 \"이전 제목\""
+    "category": "new",           # _parse_report_response()에서 기본값 주입
+    "prev_reference": "",        # _parse_report_response()에서 기본값 주입
   },
   ...
 ]

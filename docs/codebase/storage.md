@@ -311,7 +311,7 @@ Claude가 분석한 기사 클러스터들을 저장한다.
 특정 report_cache에 속한 전체 아이템을 조회한다.
 
 - `ORDER BY created_at` (생성 순).
-- `tags`를 `json.loads()`로 파싱하여 반환한다.
+- `key_facts`를 `json.loads()`로 파싱하여 반환한다.
 - `reason`, `exclusive`, `publisher`, `pub_time`은 마이그레이션 이전 데이터 호환을 위해 `r.keys()` 존재 여부를 확인한다.
 - `exclusive`는 정수(0/1)를 `bool()`로 변환하여 반환한다.
 - 반환값: 딕셔너리 리스트 `[{"id", "title", "url", "summary", "category", "prev_reference", "reason", "exclusive", "publisher", "pub_time", "key_facts", "source_count"}, ...]`.
@@ -325,12 +325,12 @@ report_items에 항목들을 저장한다.
 - `exclusive`는 `int()`로 변환하여 저장한다 (bool -> 0/1).
 - `created_at`과 `updated_at`은 함수 호출 시점의 UTC ISO 문자열.
 
-#### `update_report_item(db, item_id, summary, reason=None, exclusive=None, key_facts=None) -> None`
+#### `update_report_item(db, item_id, summary, reason=None, exclusive=None) -> None`
 
 기존 report_item을 갱신한다. 시나리오 B에서 기존 아이템을 수정할 때 사용한다.
 
 - `summary`는 항상 갱신한다.
-- `reason`, `exclusive`, `key_facts`는 값이 전달된 경우에만 갱신한다 (None이면 건너뜀).
+- `reason`, `exclusive`는 값이 전달된 경우에만 갱신한다 (None이면 건너뜀).
 - `updated_at`을 현재 UTC 시각으로 갱신한다.
 - 동적으로 UPDATE SET 절을 구성하여 필요한 필드만 갱신한다.
 
@@ -351,7 +351,7 @@ report_items에 항목들을 저장한다.
 - `datetime.now(_KST).strftime("%Y-%m-%d")`로 KST 기준 오늘 날짜를 구한다.
 - `report_cache`와 JOIN하여 `rc.date = today` 조건으로 필터링.
 - `ORDER BY ri.created_at` (생성 순).
-- 반환값: 딕셔너리 리스트 `[{"title", "url", "summary", "tags", "category"}, ...]`.
+- 반환값: 딕셔너리 리스트 `[{"title", "url", "summary", "category"}, ...]`.
 
 ### 2.4 Schedules
 
