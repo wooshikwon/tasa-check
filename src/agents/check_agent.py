@@ -330,6 +330,7 @@ def _build_user_prompt(
     articles: list[dict],
     history: list[dict],
     department: str,
+    keywords: list[str] | None = None,
 ) -> str:
     """사용자 프롬프트를 조립한다."""
     sections = []
@@ -373,6 +374,9 @@ def _build_user_prompt(
     sections.append("\n".join(lines))
 
     sections.append("위 기사를 분석하여 submit_analysis로 제출하라.")
+
+    if keywords:
+        sections.append(f"<keywords>{', '.join(keywords)}</keywords>")
 
     return "\n\n".join(sections)
 
@@ -458,7 +462,7 @@ async def analyze_articles(
         RuntimeError: 5회 시도 후에도 파싱 실패 시
     """
     system_prompt = _build_system_prompt(keywords or [], department)
-    user_prompt = _build_user_prompt(articles, history, department)
+    user_prompt = _build_user_prompt(articles, history, department, keywords=keywords)
 
     langfuse = get_langfuse()
 
