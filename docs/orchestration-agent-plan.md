@@ -656,7 +656,7 @@ Orchestrator → Writing Agent 호출
      ├─ fetch_articles → 네이버 검색 + 필터 → 번호 목록 반환 (제목+요약만)
      │    └→ LLM이 select_articles로 관련 기사 번호 선택
      │         └→ 코드가 선택된 기사만 본문 스크래핑 → context 추가
-     ├─ get_writing_style → 부서 기본 스타일 가이드 로드 → context 추가
+     ├─ get_writing_style → 스타일 규칙 + 예시 기사 5건 로드 → context 추가
      └─ submit_article → 최종 기사 작성 결과 제출 (source_indices로 출처 참조)
   ↓
 Verification (별도 LLM 호출, 에이전트 루프 밖)
@@ -777,7 +777,7 @@ LLM이 기사 전문을 그대로 다시 출력하는 일이 없도록 2단계�
 ```python
 {
     "name": "get_writing_style",
-    "description": "기사 작성 스타일 가이드를 로드한다. 사용자가 언론사를 설정한 경우 해당 스타일, 미설정 시 부서 기본 스타일을 반환한다.",
+    "description": "부서 스타일 가이드와 예시 기사를 로드한다. 스타일 규칙(리드문, 구조, 톤, 금지 표현)과 부서별 예시 기사 5건을 반환한다. 예시 기사의 문장 스타일, 논리 전개 구조, 표현 방식(숫자·날짜 작성법 등)을 분석하여 기사 작성에 반영하라.",
     "input_schema": {
         "type": "object",
         "properties": {},
@@ -789,9 +789,36 @@ LLM이 기사 전문을 그대로 다시 출력하는 일이 없도록 2단계�
 1. DB `writing_styles` 테이블에서 해당 journalist의 스타일 조회
 2. 레코드 있으면 → DB 저장 스타일 반환 (향후 언론사별 커스텀용)
 3. 레코드 없으면 (기본) → `config.py`의 `WRITING_STYLES[department]` 부서 기본 가이드 반환
-4. 포함 내용: 리드문 형식, 문단 구조, 톤, 금지 표현 등
+4. `articles/{publisher}/{department}/` 디렉토리에서 예시 기사 5건 로드
+5. 스타일 규칙 + 예시 기사를 함께 tool_result로 반환
 
-> 현 단계에서는 언론사 선택 커맨드(`/set_style`)를 제공하지 않으므로 모든 사용자가 부서 기본 가이드를 사용. DB 테이블은 미리 생성하여 향후 확장에 대비.
+**tool_result 구조**:
+```
+[스타일 규칙]
+- 리드문: 육하원칙 스트레이트. 첫 문장에 '누가 N일 무엇을 했다' 포함
+- 구조: 리드 → 핵심 팩트 → 배경 → 반응·전망
+- 톤: 객관적·건조체. '~했다' 종결
+- 금지: ~것으로 알려졌다, ~관측이 나온다, 충격, 경악
+- 기본 분량: 300~600자
+
+[예시 기사 1]
+10년간 국세 수입 71% 늘 때 근로소득세는 152% 증가
+
+지난해 직장인들이 낸 근로소득세 수입이 전년 대비 12% 증가해 70조원에 육박했다...
+
+[예시 기사 2]
+자취 감춘 3% 금리 대출 상품...시중은행 신용대출 최저 금리도 4%대
+
+주요 시중은행에서 판매하는 신용대출 상품의 최저 금리가 14개월 만에 연 4%를...
+...
+```
+
+**LLM이 예시 기사에서 학습해야 할 요소**:
+- **문장 스타일**: 문장 길이, 종결어미 패턴, 인용 방식 (직접 인용 vs 간접 인용)
+- **논리 전개 구조**: 리드→팩트→배경→전망 등 문단 간 전개 순서
+- **표현 방식**: 숫자 표기법(27조1000억원, 12.1%, 1635만3000명), 날짜 표기법(18일, 지난해, 2024년 12월), 증감 표현(~보다 N원(N%) 늘었다)
+
+> 현 단계에서는 언론사 선택 기능을 구현하지 않는다. `articles/chosun/`의 조선일보 기사를 기본 스타일로 사용하며, 모든 사용자에게 동일하게 적용한다. DB `writing_styles` 테이블은 향후 언론사별 확장에 대비하여 미리 생성만 해둔다.
 
 #### Tool 4: submit_article (필수, 최종 제출)
 ```python
@@ -1036,7 +1063,7 @@ Turn 1: LLM → analyze_attachment(0) + fetch_articles(["삼성전자 반도체"
 Turn 2: LLM → select_articles([1, 3, 7])
         → tool_result: 선택된 기사 3건의 본문 전문
 Turn 3: LLM → get_writing_style()
-        → tool_result: 부서 스타일 가이드
+        → tool_result: 부서 스타일 규칙 + 예시 기사 5건 (문장 스타일·논리 구조·표현 방식 참고용)
 Turn 4: LLM → submit_article(headline, body, word_count, source_indices=[1, 3, 7])
         → 코드: source_indices를 {title, url} 쌍으로 역매핑
 Post:   Verification LLM → verify_article (팩트 체크)
@@ -1099,7 +1126,7 @@ CREATE INDEX IF NOT EXISTS idx_conv_journalist_created
 ### 5.2 신규 테이블: writing_styles
 
 언론사별 커스텀 스타일 확장에 대비하여 DB 테이블을 미리 생성한다.
-현 단계에서는 `/set_style` 커맨드를 제공하지 않으므로 테이블은 비어 있고, `get_writing_style` tool은 DB에 레코드가 없으면 `config.py`의 부서 기본 가이드로 fallback한다.
+현 단계에서는 `/set_style` 커맨드를 제공하지 않으므로 테이블은 비어 있고, `get_writing_style` tool은 DB에 레코드가 없으면 `config.py`의 부서 기본 가이드로 fallback한다. 예시 기사는 DB가 아닌 `articles/` 디렉토리에서 파일로 관리한다 (변경 빈도 낮고, 버전 관리 필요).
 
 ```sql
 CREATE TABLE IF NOT EXISTS writing_styles (
@@ -1116,18 +1143,51 @@ CREATE TABLE IF NOT EXISTS writing_styles (
 
 **조회 로직**:
 ```python
-async def get_writing_style(db, journalist_id: int, department: str) -> dict:
-    """사용자 설정 스타일 → 없으면 부서 기본 가이드 반환."""
+async def get_writing_style(db, journalist_id: int, department: str, publisher: str = "chosun") -> dict:
+    """스타일 규칙 + 예시 기사를 함께 반환한다."""
+    # 스타일 규칙: DB → 없으면 config.py fallback
     cursor = await db.execute(
         "SELECT style_guide FROM writing_styles WHERE journalist_id = ? LIMIT 1",
         (journalist_id,),
     )
     row = await cursor.fetchone()
-    if row:
-        return json.loads(row["style_guide"])
-    # fallback: config.py 부서 기본
-    return WRITING_STYLES.get(department, WRITING_STYLES_DEFAULT)
+    rules = json.loads(row["style_guide"]) if row else WRITING_STYLES.get(department, WRITING_STYLES_DEFAULT)
+
+    # 예시 기사: articles/chosun/{department}/ 디렉토리에서 로드 (현재 chosun 고정)
+    examples = _load_example_articles(publisher, department)
+
+    return {"rules": rules, "examples": examples}
+
+
+def _load_example_articles(publisher: str, department: str, max_count: int = 5) -> list[str]:
+    """부서별 예시 기사 파일을 로드한다."""
+    examples_dir = Path(__file__).parent.parent.parent / "articles" / publisher / department
+    if not examples_dir.exists():
+        return []
+    articles = []
+    for md_file in sorted(examples_dir.glob("*.md"))[:max_count]:
+        articles.append(md_file.read_text(encoding="utf-8"))
+    return articles
 ```
+
+**예시 기사 디렉토리 구조** (`articles/`):
+```
+articles/
+└── chosun/                    # 기본 스타일 (조선일보, 현재 유일한 언론사)
+    ├── economy/               # 부서별 예시 기사 (5건씩)
+    │   ├── economy_01.md
+    │   ├── ...
+    │   └── economy_05.md
+    ├── industry/
+    ├── international/
+    ├── politics/
+    ├── social/
+    └── tech/
+```
+
+> 현재 부서당 2건 존재. Phase 2에서 부서당 5건으로 확충 필요.
+> 예시 기사는 조선일보 실제 발행 기사 원문을 그대로 저장한다 (제목 + 본문).
+> 향후 다른 언론사 스타일 지원 시 `articles/{publisher}/` 디렉토리를 추가하는 구조.
 
 **부서 기본 가이드** (`config.py`에 추가):
 ```python
@@ -1184,11 +1244,21 @@ src/
 │   ├── models.py               # 수정: conversations 테이블 DDL 추가
 │   └── repository.py           # 수정: conversation CRUD 추가
 └── config.py                   # 수정: writing 스타일 기본값 추가
+
+articles/                       # 예시 기사 (get_writing_style에서 로드)
+└── chosun/                     # 기본 스타일 (조선일보)
+    ├── economy/                # 부서별 예시 기사 5건
+    ├── industry/
+    ├── international/
+    ├── politics/
+    ├── social/
+    └── tech/
 ```
 
 신규 파일: 4개 (`orchestrator.py`, `writing_agent.py`, `middleware.py`, `file_parser.py`)
 수정 파일: 5개 (`handlers.py`, `formatters.py`, `models.py`, `repository.py`, `config.py`)
 구조 변경: `pipelines/` 디렉토리 신설 (handlers.py에서 파이프라인 로직 분리)
+데이터: `articles/` 디렉토리 — 부서별 예시 기사 5건씩 (현재 2건, Phase 2에서 확충)
 
 ---
 
@@ -1234,7 +1304,7 @@ dependencies = [
 |----------|-----------|----------|------|
 | 자연어 → check | +2 | +$0.0015 | pre-callback(1) + routing(1) |
 | 자연어 → report | +2 | +$0.0015 | pre-callback(1) + routing(1) |
-| 자연어 → writing (full) | +2 + 4~5 + 1 | +$0.007~0.012 | pre-callback(1) + routing(1) + agent loop(4~5) + verification(1) |
+| 자연어 → writing (full) | +2 + 4~5 + 1 | +$0.009~0.015 | pre-callback(1) + routing(1) + agent loop(4~5, 예시 기사 context 포함) + verification(1) |
 | 자연어 → edit_article | +3 | +$0.0035 | pre-callback(1) + routing(1) + edit(1) |
 | 자연어 → conversation | +3 | +$0.002 | pre-callback(1) + routing(1) + reply(1) |
 | /check (기존 커맨드) | 0 | $0 | 직접 핸들러, orchestrator 미경유 |
@@ -1243,6 +1313,11 @@ dependencies = [
 - Pre-callback: 대화 50건 전체 내용 대신 번호 배열 출력 → 출력 ~50토큰 (vs 전체 반환 시 ~2,000토큰)
 - fetch_articles → select_articles: 기사 15건 전문 대신 번호 배열 → 출력 ~20토큰 (vs 전체 반환 시 ~5,000토큰)
 - submit_article: source_indices 번호만 → URL/title 역매핑은 코드가 처리
+
+**예시 기사 context 증가 영향**:
+- 예시 기사 5건 × 평균 800자 ≈ 4,000자 → ~2,000토큰 추가 입력
+- get_writing_style 호출 시 1회만 context에 추가되므로 에이전트 루프의 후속 turn에서 누적 비용 발생
+- writing 시나리오 비용 약 $0.002~0.003 증가 (위 표에 반영됨)
 
 **edit_article / conversation 비용 절감 효과**:
 - 소폭 수정: writing 대비 약 $0.004~0.009 절감 (에이전트 루프 + verification 생략)
@@ -1295,12 +1370,13 @@ _file_parse_semaphore = asyncio.Semaphore(1)  # 신규: 파일 파싱은 1건씩
 | writing_agent 구현 | `writing_agent.py` | 에이전트 루프 + 5개 tool |
 | fetch + select_articles | `writing_agent.py` | 2단계 index-based 기사 수집 (검색 → 번호선택 → 스크래핑) |
 | writing style 시스템 | `models.py`, `repository.py`, `config.py` | DB 테이블 DDL + 조회 로직 + 부서별 기본 가이드 fallback |
+| 예시 기사 확충 | `articles/chosun/` | 부서당 5건으로 확충 + `_load_example_articles()` 로더 구현 |
 | submit_article 역매핑 | `writing_agent.py` | source_indices → `{title, url}` 역매핑 로직 |
 | verification 구현 | `writing_agent.py` | 팩트 체크 (verify_article tool, 에이전트 루프 후 별도 LLM 호출) |
 | 기사 출력 포매터 | `formatters.py` | 기사 Telegram HTML 포맷 + 참고 기사 목록(제목+URL) 출력 |
-| 테스트 | `tests/` | 파일 파싱 + index-based 루프 + 역매핑 + verification 테스트 |
+| 테스트 | `tests/` | 파일 파싱 + index-based 루프 + 역매핑 + verification + 예시 기사 로딩 테스트 |
 
-**완료 기준**: "이 보도자료로 기사 써줘" + PDF → 300~600자 기사 생성 + 팩트 체크 통과 + 참고 기사 목록(제목+URL) 포함
+**완료 기준**: "이 보도자료로 기사 써줘" + PDF → 300~600자 기사 생성 + 팩트 체크 통과 + 참고 기사 목록(제목+URL) 포함 + 예시 기사 스타일 반영
 
 ### Phase 3: 통합 & 안정화 (2~3일)
 
@@ -1319,7 +1395,7 @@ _file_parse_semaphore = asyncio.Semaphore(1)  # 신규: 파일 파싱은 1건씩
 ### Phase 4 (향후): 고도화
 
 - [ ] 이미지 OCR 지원 (Tesseract)
-- [ ] 언론사별 커스텀 스타일: `/set_style` 커맨드 추가 (DB 테이블은 이미 생성 완료)
+- [ ] 언론사별 커스텀 스타일: `/set_style` 커맨드 추가 + `articles/{publisher}/` 디렉토리 추가 (DB 테이블·디렉토리 구조는 이미 대비 완료)
 - [ ] 모델 선택 옵션 (/set_model로 Haiku/Sonnet 전환)
 
 ---
@@ -1398,7 +1474,7 @@ ROUTING_TEST_CASES = [
 |------|------|------|
 | Writing 모델 | **Haiku 4.5** | 전체 파이프라인 동일 모델, BYOK 비용 최소화 |
 | HWP 지원 | **미지원** | 라이브러리 불안정, 메모리 소비 大 |
-| 스타일 가이드 | **DB 테이블 선 생성** + config.py fallback | 현 단계 부서 기본만 사용. 테이블은 향후 언론사별 확장에 대비 |
+| 스타일 가이드 | **config.py 규칙 + 조선일보 예시 기사** | 추상 규칙(config.py) + 실제 기사 예시(articles/chosun/) 조합. DB 테이블은 향후 언론사별 확장 대비용 |
 | Pre-callback 필터링 | **LLM 기반** (번호만 출력) | 규칙 기반 대비 정확도 향상, 형태소 분석 의존성 불필요 |
 | LLM 출력 최적화 | **Index-based** | 모든 LLM 출력에서 콘텐츠 재출력 방지, 번호만 출력 후 코드가 역매핑 |
 | Planning 단계 | **별도 LLM 호출 없음** | Orchestrator의 extracted_params가 경량 planning 겸임. Writing Agent 루프 자체가 실행 계획 |
@@ -1406,4 +1482,5 @@ ROUTING_TEST_CASES = [
 | 참고 기사 출력 | **source_indices → {title, url} 역매핑** | 기사 하단에 참고한 기사 제목+URL 출력. LLM은 번호만, 코드가 매핑 |
 | 소폭 수정 | **edit_article 경량 핸들러** | 단일 LLM 호출, writing 대비 비용 약 70% 절감 |
 | 단순 대화 | **conversation 경량 핸들러** | reject 대신 실질적 응답 제공, 서비스 사용성 향상 |
+| 예시 기사 | **부서별 5건, 조선일보 기본 고정** | `articles/chosun/{department}/`에서 로드. DB가 아닌 파일로 관리 (변경 빈도 낮고 git 버전 관리 필요). 문장 스타일·논리 구조·표현 방식 학습용. 언론사 선택 기능은 향후 구현 |
 | Naver API 날짜 필터 | **클라이언트 사이드 필터링** | 네이버 검색 API는 서버 사이드 날짜 범위 파라미터 미지원. sort=date + pubDate 비교로 우회 |

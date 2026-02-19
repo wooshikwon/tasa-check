@@ -9,14 +9,14 @@ from telegram.ext import Application, ContextTypes
 
 from src.storage import repository as repo
 from src.bot.handlers import (
-    _run_check_pipeline,
-    _run_report_pipeline,
     _user_locks,
     _pipeline_semaphore,
     _handle_report_scenario_a,
     _handle_report_scenario_b,
     format_error_message,
 )
+from src.pipelines.check import run_check
+from src.pipelines.report import run_report
 from src.bot.formatters import (
     format_check_header,
     format_article_message,
@@ -53,7 +53,7 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         async with _pipeline_semaphore:
             try:
-                results, since, now, haiku_filtered = await _run_check_pipeline(db, journalist)
+                results, since, now, haiku_filtered = await run_check(db, journalist)
             except Exception as e:
                 logger.error("자동 check 실패 (journalist=%d): %s", journalist_id, e, exc_info=True)
                 await send_fn(f"[자동 체크] 실패: {format_error_message(e)}")
@@ -119,7 +119,7 @@ async def scheduled_report(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         async with _pipeline_semaphore:
             try:
-                results = await _run_report_pipeline(
+                results = await run_report(
                     db, journalist,
                     existing_items=existing_items if not is_scenario_a else None,
                 )

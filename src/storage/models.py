@@ -58,6 +58,31 @@ CREATE TABLE IF NOT EXISTS schedules (
     time_kst TEXT NOT NULL,          -- "HH:MM" 형식
     UNIQUE(journalist_id, command, time_kst)
 );
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    journalist_id INTEGER NOT NULL REFERENCES journalists(id),
+    role TEXT NOT NULL,              -- 'user' | 'assistant'
+    content TEXT NOT NULL DEFAULT '',
+    attachment_meta TEXT,            -- JSON: {file_id, file_name, mime_type, file_size}
+    message_type TEXT NOT NULL       -- 'text' | 'command' | 'document' | 'photo'
+        DEFAULT 'text',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_conv_journalist_created
+    ON conversations(journalist_id, created_at);
+
+CREATE TABLE IF NOT EXISTS writing_styles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    journalist_id INTEGER NOT NULL REFERENCES journalists(id),
+    publisher TEXT NOT NULL DEFAULT '',   -- 타겟 언론사 (빈 값 = 부서 기본)
+    style_guide TEXT NOT NULL,            -- JSON: 작성 가이드
+    example_articles TEXT DEFAULT '[]',   -- JSON: 예시 기사 배열 (향후 확장용)
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(journalist_id, publisher)
+);
 """
 
 

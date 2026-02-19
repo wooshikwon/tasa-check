@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
 
 _KST = timezone(timedelta(hours=9))
 
@@ -471,6 +472,10 @@ async def cleanup_old_data(db: aiosqlite.Connection) -> None:
     await db.execute(
         "DELETE FROM reported_articles WHERE checked_at < ?", (cutoff,)
     )
+    # 오래된 대화 이력 삭제
+    await db.execute(
+        "DELETE FROM conversations WHERE created_at < ?", (cutoff,)
+    )
     await db.commit()
 
 
@@ -524,3 +529,108 @@ async def get_admin_stats(db: aiosqlite.Connection) -> dict:
         "schedule_stats": schedule_stats,
         "users": users,
     }
+
+
+# --- 대화 이력 ---
+
+async def save_conversation(
+    db: aiosqlite.Connection,
+    telegram_id: str,
+    role: str,
+    content: str,
+    attachment_meta: dict | None,
+    message_type: str,
+) -> None:
+    """대화 메시지를 conversations 테이블에 저장한다."""
+    journalist = await get_journalist(db, telegram_id)
+    if not journalist:
+        return  # 미등록 사용자는 저장하지 않음
+    await db.execute(
+        """INSERT INTO conversations (journalist_id, role, content, attachment_meta, message_type)
+           VALUES (?, ?, ?, ?, ?)""",
+        (
+            journalist["id"],
+            role,
+            content,
+            json.dumps(attachment_meta, ensure_ascii=False) if attachment_meta else None,
+            message_type,
+        ),
+    )
+    await db.commit()
+
+
+async def get_recent_conversations(
+    db: aiosqlite.Connection,
+    telegram_id: str,
+    days: int = 3,
+    limit: int = 50,
+) -> list[dict]:
+    """최근 N일 내 대화를 조회한다. 최신순 정렬."""
+    journalist = await get_journalist(db, telegram_id)
+    if not journalist:
+        return []
+    cursor = await db.execute(
+        """SELECT id, role, content, attachment_meta, message_type, created_at
+           FROM conversations
+           WHERE journalist_id = ?
+             AND created_at >= datetime('now', ?)
+           ORDER BY created_at DESC
+           LIMIT ?""",
+        (journalist["id"], f"-{days} days", limit),
+    )
+    rows = await cursor.fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        if item["attachment_meta"]:
+            item["attachment_meta"] = json.loads(item["attachment_meta"])
+        result.append(item)
+    return result
+
+
+# --- 작성 스타일 ---
+
+async def get_writing_style(
+    db: aiosqlite.Connection,
+    journalist_id: int,
+    department: str,
+) -> dict:
+    """스타일 규칙 + 예시 기사를 반환한다.
+
+    DB에 사용자별 스타일이 있으면 사용, 없으면 config.py 부서 기본 가이드 반환.
+    예시 기사는 articles/chosun/{department}/ 디렉토리에서 로드.
+    """
+    from src.config import WRITING_STYLES, WRITING_STYLES_DEFAULT
+
+    cursor = await db.execute(
+        "SELECT style_guide FROM writing_styles WHERE journalist_id = ? LIMIT 1",
+        (journalist_id,),
+    )
+    row = await cursor.fetchone()
+    rules = json.loads(row["style_guide"]) if row else WRITING_STYLES.get(department, WRITING_STYLES_DEFAULT)
+
+    examples = _load_example_articles(department)
+    return {"rules": rules, "examples": examples}
+
+
+def _load_example_articles(department: str, max_count: int = 5) -> list[str]:
+    """articles/chosun/{department}/ 디렉토리에서 예시 기사를 로드한다."""
+    # 부서명(한글) -> 디렉토리명(영문) 매핑
+    _DEPT_DIR_MAP = {
+        "경제부": "economy",
+        "산업부": "industry",
+        "국제부": "international",
+        "정치부": "politics",
+        "사회부": "social",
+        "테크부": "tech",
+    }
+    dir_name = _DEPT_DIR_MAP.get(department)
+    if not dir_name:
+        return []
+    examples_dir = Path(__file__).parent.parent.parent / "articles" / "chosun" / dir_name
+    if not examples_dir.exists():
+        return []
+    articles = []
+    for md_file in sorted(examples_dir.glob("*.md"))[:max_count]:
+        articles.append(md_file.read_text(encoding="utf-8"))
+    return articles

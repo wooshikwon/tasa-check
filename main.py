@@ -6,7 +6,7 @@ from datetime import time, timedelta, timezone
 
 from dotenv import load_dotenv
 from telegram import BotCommand
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 # Langfuse 자동 계측 (Anthropic API 호출을 자동 트레이싱)
 load_dotenv()
@@ -28,6 +28,8 @@ from src.bot.handlers import (
 )
 from src.bot.settings import build_settings_handler
 from src.bot.scheduler import restore_schedules
+from src.bot.middleware import conversation_logger
+from src.agents.orchestrator import orchestrator_handler
 
 logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -109,6 +111,22 @@ def main() -> None:
 
     # /stats 관리자 전용 통계
     app.add_handler(CommandHandler("stats", stats_handler))
+
+    # 미들웨어: 모든 메시지 로깅 (group=-1, 최우선)
+    app.add_handler(
+        MessageHandler(filters.ALL, conversation_logger),
+        group=-1,
+    )
+
+    # Orchestrator: 자연어 메시지 처리 (group=1, ConversationHandler 이후)
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, orchestrator_handler),
+        group=1,
+    )
+    app.add_handler(
+        MessageHandler(filters.Document.ALL | filters.PHOTO, orchestrator_handler),
+        group=1,
+    )
 
     logger.info("봇 시작 (polling)")
     app.run_polling()

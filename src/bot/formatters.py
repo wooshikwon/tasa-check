@@ -270,3 +270,96 @@ def format_unchanged_report_items(items: list[dict]) -> list[str]:
     return _split_blockquote_messages(header, item_lines)
 
 
+# --- Writing Agent 출력 포맷 ---
+
+def format_writing_result(article: dict) -> list[str]:
+    """Writing Agent 결과를 Telegram 메시지로 포맷한다.
+
+    article 필드:
+        headline: str, body: str, word_count: int,
+        sources: list[{title, url}], verified: str,
+        verification_issues: list[dict] (optional)
+
+    반환: 4096자 이하 메시지 리스트 (길면 분할)
+    """
+    headline = article.get("headline", "")
+    body = article.get("body", "")
+    word_count = article.get("word_count", len(body))
+    sources = article.get("sources", [])
+    verified = article.get("verified", "skipped")
+
+    # 본문 구성
+    parts = [f"<b>{html_module.escape(headline)}</b>\n\n{html_module.escape(body)}"]
+
+    # 글자 수 + 검증 상태
+    status_parts = [f"{word_count}자"]
+    if verified == "revised":
+        status_parts.append("팩트체크 수정됨")
+    elif verified == "pass":
+        status_parts.append("팩트체크 통과")
+    parts.append(f"\n\n<i>({' | '.join(status_parts)})</i>")
+
+    # 참고 기사 목록
+    if sources:
+        source_lines = ["\n\n──────────\n참고한 기사:"]
+        for s in sources:
+            title = html_module.escape(s.get("title", ""))
+            url = s.get("url", "")
+            source_lines.append(f"- {title}\n  {url}")
+        parts.append("\n".join(source_lines))
+
+    full_text = "".join(parts)
+
+    # 4096자 초과 시 분할
+    if len(full_text) <= _MAX_MSG_LEN:
+        return [full_text]
+    return _split_writing_message(headline, body, sources, status_parts)
+
+
+def _split_writing_message(
+    headline: str, body: str, sources: list[dict], status_parts: list[str],
+) -> list[str]:
+    """긴 기사를 여러 메시지로 분할한다."""
+    messages = []
+    header = f"<b>{html_module.escape(headline)}</b>\n\n"
+    max_body = _MAX_MSG_LEN - len(header) - 50
+    body_escaped = html_module.escape(body)
+
+    if len(body_escaped) <= max_body:
+        messages.append(header + body_escaped)
+    else:
+        # 문단 단위로 분할
+        chunks = _chunk_by_paragraphs(body_escaped, max_body)
+        messages.append(header + chunks[0])
+        for chunk in chunks[1:]:
+            messages.append(chunk)
+
+    # 마지막 메시지: 상태 + 참고 기사
+    footer_parts = [f"<i>({' | '.join(status_parts)})</i>"]
+    if sources:
+        footer_parts.append("\n──────────\n참고한 기사:")
+        for s in sources:
+            title = html_module.escape(s.get("title", ""))
+            url = s.get("url", "")
+            footer_parts.append(f"- {title}\n  {url}")
+    messages.append("\n".join(footer_parts))
+    return messages
+
+
+def _chunk_by_paragraphs(text: str, max_len: int) -> list[str]:
+    """텍스트를 문단 단위로 분할한다."""
+    paragraphs = text.split("\n\n")
+    chunks = []
+    current = ""
+    for p in paragraphs:
+        candidate = current + ("\n\n" if current else "") + p
+        if len(candidate) > max_len and current:
+            chunks.append(current)
+            current = p
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks if chunks else [text[:max_len]]
+
+
